@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BusyGraph Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: #f4f4f9;
+            color: #333;
+            margin: 0;
+            padding: 10px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 1.5rem;
+        }
+
+        h2 {
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 1.25rem;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 10px;
+        }
+
+        @media (max-width: 700px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            min-width: 0;
+            /* Prevent grid blowout */
+        }
+
+        .full-width {
+            grid-column: 1 / -1;
+        }
+
+        .stat-box {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #4a90e2;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 1em;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>BusyGraph Dashboard</h1>
+
+        <!-- 1. Activity Calendar (Fixed) -->
+        <div class="card full-width" style="margin-bottom: 10px;">
+            <h2>Activity Calendar</h2>
+            <div class="heatmap-wrapper" style="justify-content: center; overflow-x: auto;">
+                <div class="heatmap-days">
+                    <div></div> <!-- Header row alignment -->
+                    <div class="day-label">Mon</div>
+                    <div></div>
+                    <div class="day-label">Wed</div>
+                    <div></div>
+                    <div class="day-label">Fri</div>
+                    <div></div>
+                    <div class="day-label">Sun</div>
+                </div>
+                <div class="heatmap-content">
+                    <div id="heatmap-months" class="heatmap-months"></div>
+                    <div id="heatmap" class="heatmap-grid"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 2. Time Range Selector -->
+        <div class="range-selector">
+            <button class="range-btn active" onclick="setRange('1h')">Last Hour</button>
+            <button class="range-btn" onclick="setRange('24h')">24 Hours</button>
+            <button class="range-btn" onclick="setRange('7d')">7 Days</button>
+            <button class="range-btn" onclick="setRange('30d')">30 Days</button>
+            <button class="range-btn" onclick="setRange('1y')">1 Year</button>
+        </div>
+
+
+        <!-- 3. Dynamic Stats & Charts -->
+        <!-- Keyboard Section -->
+        <h3 style="margin-top: 5px; margin-bottom: 5px; color: #444;">Keyboard</h3>
+        <div class="grid" style="margin-bottom: 15px;">
+            <div class="card">
+                <div class="stat-box">
+                    <div class="stat-value" id="totalKeystrokes">0</div>
+                    <div class="stat-label">Total Keystrokes</div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="stat-box">
+                    <div class="stat-value"><span id="kpmMax">0</span> <span
+                            style="font-size: 0.4em; color: #999; font-weight: normal;">(Max)</span></div>
+                    <div class="stat-label">Avg: <span id="kpmAvg">0</span> KPM</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid" style="margin-bottom: 15px;">
+            <div class="card">
+                <h4 style="margin-top: 0; margin-bottom: 5px; color: #666;">Keystrokes per Minute</h4>
+                <div style="position: relative; height: 155px; width: 100%;">
+                    <canvas id="historyChart"></canvas>
+                </div>
+            </div>
+            <div class="card">
+                <h4 style="margin-top: 0; margin-bottom: 5px; color: #666;">Top Keys</h4>
+                <div style="position: relative; height: 155px; width: 100%;">
+                    <canvas id="keysChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Mouse Section -->
+        <h3 style="margin-bottom: 5px; margin-top: 5px; color: #444;">Mouse</h3>
+        <div class="grid" style="margin-bottom: 10px;">
+            <div class="card">
+                <div class="stat-box">
+                    <div class="stat-value" id="mouseDist">0m</div>
+                    <div class="stat-label">Distance Travelled</div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="stat-box">
+                    <div class="stat-value"><span id="clicksLeft">0</span> / <span id="clicksRight">0</span></div>
+                    <div class="stat-label">Clicks (L/R)</div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="stat-box">
+                    <div class="stat-value" id="scrolls">0</div>
+                    <div class="stat-label">Pages Scrolled</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <style>
+        .range-selector {
+            margin-bottom: 10px;
+            text-align: center;
+        }
+
+        .range-btn {
+            background: #fff;
+            border: 1px solid #ddd;
+            padding: 8px 16px;
+            margin: 0 5px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .range-btn:hover {
+            background: #f0f0f0;
+        }
+
+        .range-btn.active {
+            background: #4a90e2;
+            color: white;
+            border-color: #4a90e2;
+        }
+
+        .heatmap-wrapper {
+            display: flex;
+            align-items: flex-end;
+            font-size: 10px;
+            color: #767676;
+        }
+
+        .heatmap-days {
+            display: grid;
+            grid-template-rows: 15px repeat(7, 11px);
+            /* Compact rows */
+            margin-right: 5px;
+            text-align: right;
+            line-height: 11px;
+            gap: 1px;
+            /* Match grid vertical gap */
+        }
+
+        .day-label {
+            position: relative;
+            top: 0;
+        }
+
+        .heatmap-content {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .heatmap-months {
+            display: grid;
+            grid-template-columns: repeat(53, 11px);
+            /* Exact match cols */
+            height: 15px;
+            margin-bottom: 1px;
+            /* Match grid gap */
+            gap: 1px;
+            /* Match grid gap */
+        }
+
+        .month-label {
+            text-align: left;
+        }
+
+        .heatmap-grid {
+            display: grid;
+            grid-template-columns: repeat(53, 11px);
+            grid-template-rows: repeat(7, 11px);
+            grid-auto-flow: column;
+            gap: 1px;
+            /* Reduced gap */
+        }
+
+        .day-cell {
+            width: 10px;
+            height: 10px;
+            background-color: #ebedf0;
+            border-radius: 2px;
+        }
+
+        .day-cell.l1 {
+            background-color: #9be9a8;
+        }
+
+        .day-cell.l2 {
+            background-color: #40c463;
+        }
+
+        .day-cell.l3 {
+            background-color: #30a14e;
+        }
+
+        .day-cell.l4 {
+            background-color: #216e39;
+        }
+    </style>
+
+    <script>
+        const ctxHistory = document.getElementById('historyChart').getContext('2d');
+        const ctxKeys = document.getElementById('keysChart').getContext('2d');
+
+        // Charts
+        const historyChart = new Chart(ctxHistory, {
+            type: 'line',
+            data: { labels: [], datasets: [{ label: 'Keystrokes', data: [], borderColor: '#4a90e2', fill: true, backgroundColor: 'rgba(74, 144, 226, 0.2)' }] },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: { x: { display: true }, y: { beginAtZero: true } }
+            }
+        });
+
+        const keysChart = new Chart(ctxKeys, {
+            type: 'bar',
+            data: { labels: [], datasets: [{ label: 'Top Keys', data: [], backgroundColor: '#2ecc71' }] },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: { x: { display: true }, y: { display: true } }
+            }
+        });
+
+        function renderHeatmap(calendar) {
+            const container = document.getElementById('heatmap');
+            const monthContainer = document.getElementById('heatmap-months');
+            container.innerHTML = '';
+            monthContainer.innerHTML = '';
+
+            // Map timestamps to counts
+            const counts = {};
+            let max = 0;
+            if (calendar) {
+                calendar.forEach(pt => {
+                    const day = new Date(pt.time * 1000).setHours(0, 0, 0, 0);
+                    counts[day] = pt.count;
+                    if (pt.count > max) max = pt.count;
+                });
+            }
+
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+
+            // Start one year ago (52 weeks)
+            // Align to Monday (Mon-Sun)
+            const oneYearAgo = new Date(today);
+            oneYearAgo.setDate(today.getDate() - 364);
+            const dayOfWeek = (oneYearAgo.getDay() + 6) % 7;
+            const startDate = new Date(oneYearAgo);
+            startDate.setDate(oneYearAgo.getDate() - dayOfWeek);
+
+            // Months logic
+            let currentMonth = -1;
+
+            // Total cells: 53 * 7 = 371
+            for (let i = 0; i < 371; i++) {
+                const current = new Date(startDate);
+                current.setDate(startDate.getDate() + i);
+
+                // Add Month Label
+                if (current.getDay() === 1) {
+                    const thursday = new Date(current);
+                    thursday.setDate(current.getDate() + 3);
+                    const targetMonth = thursday.getMonth();
+
+                    const label = document.createElement('div');
+
+                    // Logic: Label if month changes (based on Thursday rule)
+                    // Collision fix: If it's the very first column, check if month changes soon to avoid overlap
+                    let showLabel = false;
+
+                    if (targetMonth !== currentMonth) {
+                        showLabel = true;
+                        currentMonth = targetMonth;
+
+                        // Check for start overlap
+                        // If this is the first label we are printing (or very early), and the NEXT month is coming very soon (e.g. next week)
+                        // Then maybe skip this one?
+                        // Actually, simpler heuristic:
+                        // If we are printing a label, and the previous label was printed < 2 columns ago, we have a problem.
+                        // But here we are iterating forward.
+                        // So for the FIRST column (start of chart), if the chart starts late in the month, skipping is good.
+
+                        // We can't easily check "colIndex" here without tracking it, but we can assume sequential calls.
+                        // Let's check dates.
+                        // If `thursday` is > 20th of the month, we are late in the month.
+                        // Standard months ~30 days. If > 20, next month is ~10 days/1.5 weeks away.
+                        // So if we are printing a label for the FIRST time (current label count == 0?)
+                        // We need a variable outside.
+                        // Let's use a simpler "don't print if overlap probable" check for ALL labels? No, only bad at edges.
+
+                        // Using the Thursday date:
+                        // If a label is printed, it consumes spacing.
+                        // Let's just blindly apply Thursday rule for now, but handle the "First Label" edge case.
+
+                        // Heuristic: If this is the first time we set currentMonth (start of loop), 
+                        // and the date is > 15, let's skip printing to avoid clashing with next month.
+                        // But we need to update currentMonth regardless to suppress subsequent weeks of this month.
+                        if (i < 7 && thursday.getDate() > 15) {
+                            showLabel = false;
+                        }
+                    }
+
+                    if (showLabel) {
+                        const mn = thursday.toLocaleString('default', { month: 'short' });
+                        label.style.overflow = 'visible';
+                        label.innerText = mn;
+                    }
+                    monthContainer.appendChild(label);
+                }
+
+                const ts = current.getTime();
+                const count = counts[ts] || 0;
+
+                const cell = document.createElement('div');
+                cell.className = 'day-cell';
+
+                if (count > 0) {
+                    if (count > max * 0.75) cell.classList.add('l4');
+                    else if (count > max * 0.50) cell.classList.add('l3');
+                    else if (count > max * 0.25) cell.classList.add('l2');
+                    else cell.classList.add('l1');
+                }
+
+                cell.title = `${current.toDateString()}: ${count} keystrokes`;
+                container.appendChild(cell);
+            }
+        }
+
+        let currentRange = '1h';
+
+        function setRange(range) {
+            currentRange = range;
+            // Update buttons
+            document.querySelectorAll('.range-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+
+            // Re-fetch immediately
+            fetchStats();
+        }
+
+        async function fetchStats() {
+            try {
+                const response = await fetch('/api/stats?range=' + currentRange);
+                const data = await response.json();
+
+                // Update Total
+                document.getElementById('totalKeystrokes').innerText = data.total.toLocaleString();
+
+                // Update KPM
+                if (data.kpm) {
+                    document.getElementById('kpmMax').innerText = data.kpm.max.toLocaleString();
+                    document.getElementById('kpmAvg').innerText = data.kpm.avg.toFixed(1);
+                }
+
+                // Update Mouse Stats (Auto DPI)
+                const dpr = window.devicePixelRatio || 1;
+                const dpi = 96 * dpr;
+                const pxPerMeter = dpi / 0.0254;
+
+                const meters = data.mouse.distance / pxPerMeter;
+                document.getElementById('mouseDist').innerText = meters.toFixed(2) + 'm';
+                document.getElementById('clicksLeft').innerText = data.mouse.clicks_left.toLocaleString();
+                document.getElementById('clicksRight').innerText = data.mouse.clicks_right.toLocaleString();
+
+                // Estimate Pages: Assume ~100 scroll units (pixels/ticks) per page
+                const pages = Math.round(data.mouse.scroll / 100);
+                document.getElementById('scrolls').innerText = pages.toLocaleString();
+
+                // Format labels based on range
+                let labelFmt = { hour: 'numeric', minute: 'numeric' };
+                if (currentRange === '7d' || currentRange === '30d' || currentRange === '1y') {
+                    labelFmt = { month: 'short', day: 'numeric', hour: 'numeric' };
+                    if (currentRange === '1y') {
+                        labelFmt = { month: 'short', day: 'numeric' };
+                    }
+                }
+
+                const labels = data.history.map(pt => new Date(pt.time * 1000).toLocaleTimeString([], labelFmt));
+
+                // Update History (Line)
+                historyChart.data.labels = labels;
+                historyChart.data.datasets[0].data = data.history.map(pt => pt.count);
+                historyChart.update();
+
+                // Update Top Keys
+                keysChart.data.labels = data.top_keys.map(k => k.key);
+                keysChart.data.datasets[0].data = data.top_keys.map(k => k.count);
+                keysChart.update();
+
+                // Update Heatmap
+                renderHeatmap(data.calendar);
+
+            } catch (e) {
+                console.error("Error fetching stats:", e);
+            }
+        }
+
+        setInterval(fetchStats, 5000);
+        fetchStats();
+    </script>
+</body>
+
+</html>
