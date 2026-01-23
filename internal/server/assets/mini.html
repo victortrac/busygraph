@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BusyGraph Quick Stats</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+            padding: 15px;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 15px;
+        }
+
+        h1 {
+            font-size: 1.2rem;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .current-kpm {
+            font-size: 2.5rem;
+            font-weight: bold;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        .kpm-label {
+            font-size: 0.9rem;
+            opacity: 0.9;
+            margin-top: 2px;
+        }
+
+        .chart-container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 12px;
+            padding: 15px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            position: relative;
+        }
+
+        .chart-wrapper {
+            height: 180px;
+            position: relative;
+        }
+
+        .stats-row {
+            display: flex;
+            justify-content: space-around;
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 1.1rem;
+            font-weight: bold;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            opacity: 0.8;
+            margin-top: 2px;
+        }
+
+        .last-update {
+            text-align: center;
+            font-size: 0.7rem;
+            opacity: 0.7;
+            margin-top: 8px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="header">
+        <h1>BusyGraph</h1>
+        <div class="current-kpm" id="currentKPM">0</div>
+        <div class="kpm-label">Keystrokes per Minute</div>
+    </div>
+
+    <div class="chart-container">
+        <div class="chart-wrapper">
+            <canvas id="miniChart"></canvas>
+        </div>
+        <div class="stats-row">
+            <div class="stat-item">
+                <div class="stat-value" id="totalKeys">0</div>
+                <div class="stat-label">Total Keys</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="maxKPM">0</div>
+                <div class="stat-label">Max KPM</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="avgKPM">0</div>
+                <div class="stat-label">Avg KPM</div>
+            </div>
+        </div>
+        <div class="last-update" id="lastUpdate">Loading...</div>
+    </div>
+
+    <script>
+        const ctx = document.getElementById('miniChart').getContext('2d');
+
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'KPM',
+                    data: [],
+                    borderColor: '#fff',
+                    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+                    fill: true,
+                    tension: 0.4,
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    pointHoverRadius: 4,
+                    pointBackgroundColor: '#fff',
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                        padding: 8,
+                        displayColors: false,
+                    }
+                },
+                scales: {
+                    x: {
+                        display: true,
+                        grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                        ticks: {
+                            color: 'rgba(255, 255, 255, 0.8)',
+                            maxTicksLimit: 6,
+                            font: { size: 9 }
+                        }
+                    },
+                    y: {
+                        display: true,
+                        beginAtZero: true,
+                        grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                        ticks: {
+                            color: 'rgba(255, 255, 255, 0.8)',
+                            font: { size: 9 }
+                        }
+                    }
+                }
+            }
+        });
+
+        async function fetchStats() {
+            try {
+                const response = await fetch('/api/stats?range=1h');
+                const data = await response.json();
+
+                // Update current KPM (use the most recent non-zero value)
+                let currentKPM = 0;
+                if (data.history && data.history.length > 0) {
+                    // Find the most recent non-zero value
+                    for (let i = data.history.length - 1; i >= 0; i--) {
+                        if (data.history[i].count > 0) {
+                            currentKPM = data.history[i].count;
+                            break;
+                        }
+                    }
+                }
+                document.getElementById('currentKPM').innerText = currentKPM;
+
+                // Update stats
+                document.getElementById('totalKeys').innerText = data.total.toLocaleString();
+                document.getElementById('maxKPM').innerText = data.kpm.max.toLocaleString();
+                document.getElementById('avgKPM').innerText = data.kpm.avg.toFixed(1);
+
+                // Update chart (last 30 minutes for better detail)
+                const last30 = data.history.slice(-30);
+                const labels = last30.map(pt => {
+                    const date = new Date(pt.time * 1000);
+                    return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+                });
+
+                chart.data.labels = labels;
+                chart.data.datasets[0].data = last30.map(pt => pt.count);
+                chart.update('none'); // Update without animation for smoother refresh
+
+                // Update timestamp
+                const now = new Date();
+                document.getElementById('lastUpdate').innerText =
+                    'Updated: ' + now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+            } catch (e) {
+                console.error("Error fetching stats:", e);
+                document.getElementById('lastUpdate').innerText = 'Error loading data';
+            }
+        }
+
+        // Initial fetch
+        fetchStats();
+
+        // Refresh every 5 seconds
+        setInterval(fetchStats, 5000);
+    </script>
+</body>
+
+</html>

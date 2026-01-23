@@ -35,10 +35,16 @@ type TimePoint struct {
 type Stats struct {
 	Total    int         `json:"total"`
 	KPM      KPMStats    `json:"kpm"`
+	Typing   TypingStats `json:"typing"`
 	TopKeys  []KeyCount  `json:"top_keys"`
 	History  []TimePoint `json:"history"`  // Last 60 minutes
 	Calendar []TimePoint `json:"calendar"` // Daily counts for the last year
 	Mouse    MouseStats  `json:"mouse"`
+}
+
+type TypingStats struct {
+	CharsPerBackspace float64 `json:"chars_per_backspace"`
+	Backspaces        int     `json:"backspaces"`
 }
 
 // Tracker maintains the state of keystrokes
@@ -384,14 +390,34 @@ func (t *Tracker) GetStats(timeRange string) Stats {
 	// Max: The highest single minute sum in the range
 	err = t.db.QueryRow(`
 		SELECT COALESCE(MAX(minute_total), 0) FROM (
-			SELECT SUM(count) as minute_total 
-			FROM keystrokes 
-			WHERE minute >= ? 
+			SELECT SUM(count) as minute_total
+			FROM keystrokes
+			WHERE minute >= ?
 			GROUP BY minute
 		)
 	`, startTime).Scan(&stats.KPM.Max)
 	if err != nil {
 		stats.KPM.Max = 0
+	}
+
+	// 7. Typing Stats (Characters per Backspace)
+	var backspaceCount int
+	err = t.db.QueryRow(`
+		SELECT COALESCE(SUM(count), 0)
+		FROM keystrokes
+		WHERE minute >= ? AND key_char = '[BACKSPACE]'
+	`, startTime).Scan(&backspaceCount)
+	if err != nil {
+		backspaceCount = 0
+	}
+	stats.Typing.Backspaces = backspaceCount
+
+	// Calculate chars per backspace (non-backspace chars / backspaces)
+	nonBackspaceChars := stats.Total - backspaceCount
+	if backspaceCount > 0 {
+		stats.Typing.CharsPerBackspace = float64(nonBackspaceChars) / float64(backspaceCount)
+	} else {
+		stats.Typing.CharsPerBackspace = 0 // No backspaces yet
 	}
 
 	return stats

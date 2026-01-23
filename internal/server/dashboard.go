@@ -8,12 +8,18 @@ import (
 	"github.com/victortrac/busygraph/internal/tracker"
 )
 
-//go:embed assets/index.html
+//go:embed assets/*.html
 var assets embed.FS
 
 func RegisterDashboard(mux *http.ServeMux, t *tracker.Tracker) {
 	mux.HandleFunc("/dashboard", func(w http.ResponseWriter, r *http.Request) {
 		content, _ := assets.ReadFile("assets/index.html")
+		w.Header().Set("Content-Type", "text/html")
+		w.Write(content)
+	})
+
+	mux.HandleFunc("/mini", func(w http.ResponseWriter, r *http.Request) {
+		content, _ := assets.ReadFile("assets/mini.html")
 		w.Header().Set("Content-Type", "text/html")
 		w.Write(content)
 	})

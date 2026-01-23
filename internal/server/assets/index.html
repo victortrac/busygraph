@@ -126,6 +126,12 @@
                     <div class="stat-label">Avg: <span id="kpmAvg">0</span> KPM</div>
                 </div>
             </div>
+            <div class="card">
+                <div class="stat-box">
+                    <div class="stat-value" id="charsPerBackspace">-</div>
+                    <div class="stat-label">Chars per Backspace</div>
+                </div>
+            </div>
         </div>
 
         <div class="grid" style="margin-bottom: 15px;">
@@ -273,17 +279,37 @@
         const ctxHistory = document.getElementById('historyChart').getContext('2d');
         const ctxKeys = document.getElementById('keysChart').getContext('2d');
 
+        // Determine chart type based on time range
+        function getHistoryChartType(range) {
+            return (range === '1h') ? 'line' : 'bar';
+        }
+
+        function createHistoryChart(type) {
+            const isLine = type === 'line';
+            return new Chart(ctxHistory, {
+                type: type,
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Keystrokes',
+                        data: [],
+                        borderColor: '#4a90e2',
+                        backgroundColor: isLine ? 'rgba(74, 144, 226, 0.2)' : 'rgba(74, 144, 226, 0.7)',
+                        fill: isLine
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { x: { display: true }, y: { beginAtZero: true } }
+                }
+            });
+        }
+
         // Charts
-        const historyChart = new Chart(ctxHistory, {
-            type: 'line',
-            data: { labels: [], datasets: [{ label: 'Keystrokes', data: [], borderColor: '#4a90e2', fill: true, backgroundColor: 'rgba(74, 144, 226, 0.2)' }] },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
-                scales: { x: { display: true }, y: { beginAtZero: true } }
-            }
-        });
+        let currentHistoryChartType = 'line';
+        let historyChart = createHistoryChart('line');
 
         const keysChart = new Chart(ctxKeys, {
             type: 'bar',
@@ -429,6 +455,13 @@
                     document.getElementById('kpmAvg').innerText = data.kpm.avg.toFixed(1);
                 }
 
+                // Update Typing Stats (Chars per Backspace)
+                if (data.typing && data.typing.backspaces > 0) {
+                    document.getElementById('charsPerBackspace').innerText = data.typing.chars_per_backspace.toFixed(1);
+                } else {
+                    document.getElementById('charsPerBackspace').innerText = '-';
+                }
+
                 // Update Mouse Stats (Auto DPI)
                 const dpr = window.devicePixelRatio || 1;
                 const dpi = 96 * dpr;
@@ -454,7 +487,13 @@
 
                 const labels = data.history.map(pt => new Date(pt.time * 1000).toLocaleTimeString([], labelFmt));
 
-                // Update History (Line)
+                // Update History Chart (switch type if needed)
+                const desiredType = getHistoryChartType(currentRange);
+                if (desiredType !== currentHistoryChartType) {
+                    historyChart.destroy();
+                    currentHistoryChartType = desiredType;
+                    historyChart = createHistoryChart(desiredType);
+                }
                 historyChart.data.labels = labels;
                 historyChart.data.datasets[0].data = data.history.map(pt => pt.count);
                 historyChart.update();
