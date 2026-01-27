@@ -423,6 +423,50 @@ func (t *Tracker) GetStats(timeRange string) Stats {
 	return stats
 }
 
+type HeatmapPoint struct {
+	Timestamp int64   `json:"ts"`
+	Value     float64 `json:"value"`
+}
+
+func (t *Tracker) GetHeatmap() []HeatmapPoint {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	data := make(map[int64]float64)
+
+	// Keystroke counts per minute bucket
+	rows, err := t.db.Query(`SELECT minute, SUM(count) FROM keystrokes GROUP BY minute`)
+	if err != nil {
+		log.Printf("Failed to query heatmap keystrokes: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ts int64
+		var val float64
+		rows.Scan(&ts, &val)
+		data[ts] += val
+	}
+
+	// Mouse distance per minute bucket
+	rowsMouse, err := t.db.Query(`SELECT minute, SUM(value) FROM mouse_metrics WHERE metric_name = 'distance' GROUP BY minute`)
+	if err == nil {
+		defer rowsMouse.Close()
+		for rowsMouse.Next() {
+			var ts int64
+			var val float64
+			rowsMouse.Scan(&ts, &val)
+			data[ts] += val / 100.0
+		}
+	}
+
+	result := make([]HeatmapPoint, 0, len(data))
+	for ts, v := range data {
+		result = append(result, HeatmapPoint{Timestamp: ts, Value: v})
+	}
+	return result
+}
+
 type MouseStats struct {
 	Distance    float64 `json:"distance"`
 	ClicksLeft  int     `json:"clicks_left"`

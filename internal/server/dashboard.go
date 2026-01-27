@@ -24,6 +24,12 @@ func RegisterDashboard(mux *http.ServeMux, t *tracker.Tracker) {
 		w.Write(content)
 	})
 
+	mux.HandleFunc("/api/heatmap", func(w http.ResponseWriter, r *http.Request) {
+		data := t.GetHeatmap()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(data)
+	})
+
 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) {
 		timeRange := r.URL.Query().Get("range")
 		if timeRange == "" {

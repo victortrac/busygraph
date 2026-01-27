@@ -78,6 +78,14 @@
     <div class="container">
         <h1>BusyGraph Dashboard</h1>
 
+        <!-- 0. Daily Activity Heatmap -->
+        <div class="card full-width" style="margin-bottom: 10px;">
+            <h2>Daily Activity Heatmap</h2>
+            <div style="overflow-x: auto;">
+                <canvas id="heatmapCanvas"></canvas>
+            </div>
+        </div>
+
         <!-- 1. Activity Calendar (Fixed) -->
         <div class="card full-width" style="margin-bottom: 10px;">
             <h2>Activity Calendar</h2>
@@ -513,6 +521,127 @@
 
         setInterval(fetchStats, 5000);
         fetchStats();
+
+        // Daily Activity Heatmap — X=days, Y=time-of-day (24h, bottom=12AM top=12AM)
+        async function fetchHeatmap() {
+            try {
+                const resp = await fetch('/api/heatmap');
+                const points = await resp.json();
+                if (!points || points.length === 0) return;
+
+                // Group by local day and minute-of-day using browser timezone
+                const dayMap = {};
+                let maxVal = 0;
+                points.forEach(p => {
+                    const d = new Date(p.ts * 1000);
+                    const day = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+                    const minute = d.getHours() * 60 + d.getMinutes();
+                    if (!dayMap[day]) dayMap[day] = {};
+                    dayMap[day][minute] = (dayMap[day][minute] || 0) + p.value;
+                    if (dayMap[day][minute] > maxVal) maxVal = dayMap[day][minute];
+                });
+
+                const days = Object.keys(dayMap).sort();
+                const numDays = days.length;
+                const totalMinutes = 1440;
+
+                const canvas = document.getElementById('heatmapCanvas');
+                const dpr = window.devicePixelRatio || 1;
+
+                // Layout in CSS pixels
+                const marginLeft = 50;  // Y-axis labels
+                const marginBottom = 30; // X-axis labels
+                const marginTop = 5;
+                const marginRight = 5;
+
+                // Grid area fills available width
+                const containerWidth = canvas.parentElement.clientWidth;
+                const minGridW = containerWidth - marginLeft - marginRight;
+                const gridW = Math.max(minGridW, numDays); // at least 1px per day
+                const gridH = 400; // fixed height for the grid area
+
+                const cssW = gridW + marginLeft + marginRight;
+                const cssH = gridH + marginTop + marginBottom;
+
+                // Set canvas resolution for sharp text
+                canvas.width = Math.round(cssW * dpr);
+                canvas.height = Math.round(cssH * dpr);
+                canvas.style.width = cssW + 'px';
+                canvas.style.height = cssH + 'px';
+
+                const ctx = canvas.getContext('2d');
+                ctx.scale(dpr, dpr);
+
+                // Background
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(0, 0, cssW, cssH);
+
+                // Draw heatmap pixels using ImageData for performance
+                // Each day is a column, each minute is a row
+                // Y: minute 0 (12AM) at bottom, minute 1439 (11:59PM) at top
+                const pxPerDay = gridW / numDays;
+                const pxPerMin = gridH / totalMinutes;
+
+                for (let di = 0; di < numDays; di++) {
+                    const day = days[di];
+                    const row = dayMap[day];
+                    if (!row) continue;
+                    const x = marginLeft + di * pxPerDay;
+                    const w = Math.max(Math.ceil(pxPerDay), 1);
+                    for (const mStr in row) {
+                        const m = parseInt(mStr);
+                        const val = row[m];
+                        if (val <= 0) continue;
+                        const intensity = Math.min(val / maxVal, 1);
+                        // white -> yellow -> red
+                        const r = 255;
+                        const g = Math.round(255 * (1 - intensity));
+                        const b = Math.round(255 * Math.max(0, 1 - intensity * 2));
+                        ctx.fillStyle = `rgb(${r},${g},${b})`;
+                        // minute 0 at top, 1439 at bottom
+                        const y = marginTop + m * pxPerMin;
+                        const h = Math.max(Math.ceil(pxPerMin), 1);
+                        ctx.fillRect(x, y, w, h);
+                    }
+                }
+
+                // Y-axis labels: time of day every 3 hours
+                ctx.fillStyle = '#555';
+                ctx.font = '12px -apple-system, sans-serif';
+                ctx.textAlign = 'right';
+                ctx.textBaseline = 'middle';
+                for (let h = 0; h <= 24; h += 3) {
+                    const m = h * 60;
+                    const y = marginTop + m * pxPerMin;
+                    const hr = h % 12 === 0 ? 12 : h % 12;
+                    const ampm = h < 12 || h === 24 ? 'AM' : 'PM';
+                    ctx.fillText(hr + ' ' + ampm, marginLeft - 6, y);
+                }
+
+                // X-axis labels: dates
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
+                const maxLabels = Math.min(numDays, Math.floor(gridW / 60));
+                const step = Math.max(1, Math.floor(numDays / maxLabels));
+                for (let i = 0; i < numDays; i += step) {
+                    const x = marginLeft + (i + 0.5) * pxPerDay;
+                    // Format as Mon DD
+                    const parts = days[i].split('-');
+                    const d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+                    const label = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+                    ctx.fillText(label, x, marginTop + gridH + 6);
+                }
+
+                // Border around grid
+                ctx.strokeStyle = '#ccc';
+                ctx.lineWidth = 0.5;
+                ctx.strokeRect(marginLeft, marginTop, gridW, gridH);
+
+            } catch (e) {
+                console.error("Error fetching heatmap:", e);
+            }
+        }
+        fetchHeatmap();
     </script>
 </body>
 
