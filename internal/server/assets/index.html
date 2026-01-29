@@ -327,7 +327,7 @@
                 responsive: true,
                 maintainAspectRatio: false,
                 plugins: { legend: { display: false } },
-                scales: { x: { display: true }, y: { display: true } }
+                scales: { x: { display: true }, y: { display: true, ticks: { autoSkip: false } } }
             }
         });
 
@@ -581,6 +581,19 @@
                 // Y: minute 0 (12AM) at bottom, minute 1439 (11:59PM) at top
                 const pxPerDay = gridW / numDays;
                 const pxPerMin = gridH / totalMinutes;
+
+                // Highlight weekend columns with subtle tint
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.04)';
+                for (let di = 0; di < numDays; di++) {
+                    const parts = days[di].split('-');
+                    const d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+                    const dow = d.getDay(); // 0 = Sunday, 6 = Saturday
+                    if (dow === 0 || dow === 6) {
+                        const x = marginLeft + di * pxPerDay;
+                        const w = Math.max(Math.ceil(pxPerDay), 1);
+                        ctx.fillRect(x, marginTop, w, gridH);
+                    }
+                }
 
                 for (let di = 0; di < numDays; di++) {
                     const day = days[di];
