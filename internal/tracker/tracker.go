@@ -32,14 +32,23 @@ type TimePoint struct {
 	Count int   `json:"count"`
 }
 
+type VideoCallState struct {
+	InCall           bool     `json:"in_call"`
+	CameraActive     bool     `json:"camera_active"`
+	MicrophoneActive bool     `json:"microphone_active"`
+	CameraUsers      []string `json:"camera_users"`
+	MicrophoneUsers  []string `json:"microphone_users"`
+}
+
 type Stats struct {
-	Total    int         `json:"total"`
-	KPM      KPMStats    `json:"kpm"`
-	Typing   TypingStats `json:"typing"`
-	TopKeys  []KeyCount  `json:"top_keys"`
-	History  []TimePoint `json:"history"`  // Last 60 minutes
-	Calendar []TimePoint `json:"calendar"` // Daily counts for the last year
-	Mouse    MouseStats  `json:"mouse"`
+	Total     int            `json:"total"`
+	KPM       KPMStats       `json:"kpm"`
+	Typing    TypingStats    `json:"typing"`
+	TopKeys   []KeyCount     `json:"top_keys"`
+	History   []TimePoint    `json:"history"`  // Last 60 minutes
+	Calendar  []TimePoint    `json:"calendar"` // Daily counts for the last year
+	Mouse     MouseStats     `json:"mouse"`
+	VideoCall VideoCallState `json:"video_call"`
 }
 
 type TypingStats struct {
@@ -76,12 +85,12 @@ func NewTracker() *Tracker {
 		log.Fatalf("Failed to open database: %v", err)
 	}
 
-	// Create table
+	// Create tables
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS keystrokes (
-			minute INTEGER, 
-			key_char TEXT, 
-			count INTEGER, 
+			minute INTEGER,
+			key_char TEXT,
+			count INTEGER,
 			PRIMARY KEY (minute, key_char)
 		);
 		CREATE TABLE IF NOT EXISTS mouse_metrics (
@@ -89,6 +98,13 @@ func NewTracker() *Tracker {
 			metric_name TEXT,
 			value REAL,
 			PRIMARY KEY (minute, metric_name)
+		);
+		CREATE TABLE IF NOT EXISTS video_calls (
+			minute INTEGER PRIMARY KEY,
+			in_call INTEGER,
+			camera_active INTEGER,
+			microphone_active INTEGER,
+			app TEXT
 		);
 	`)
 	if err != nil {
@@ -477,4 +493,221 @@ type MouseStats struct {
 type KPMStats struct {
 	Avg float64 `json:"avg"`
 	Max int     `json:"max"`
+}
+
+// TrackVideoCall records the current video call state
+func (t *Tracker) TrackVideoCall(inCall, cameraActive, micActive bool, app string) {
+	if !inCall {
+		return // Only track when in a call
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	bucket := time.Now().Truncate(time.Minute).Unix()
+
+	_, err := t.db.Exec(`
+		INSERT INTO video_calls (minute, in_call, camera_active, microphone_active, app)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(minute) DO UPDATE SET
+			in_call = ?,
+			camera_active = MAX(camera_active, ?),
+			microphone_active = MAX(microphone_active, ?),
+			app = COALESCE(NULLIF(?, ''), app)
+	`, bucket,
+		boolToInt(inCall), boolToInt(cameraActive), boolToInt(micActive), app,
+		boolToInt(inCall), boolToInt(cameraActive), boolToInt(micActive), app)
+	if err != nil {
+		log.Printf("Failed to track video call: %v", err)
+	}
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// VideoCallStats contains aggregated video call statistics
+type VideoCallStats struct {
+	TotalMinutes     int            `json:"total_minutes"`      // Total minutes in calls
+	TotalCalls       int            `json:"total_calls"`        // Estimated number of calls
+	CameraMinutes    int            `json:"camera_minutes"`     // Minutes with camera on
+	MicrophoneMinutes int           `json:"microphone_minutes"` // Minutes with mic on
+	AppBreakdown     []AppCallStats `json:"app_breakdown"`      // Per-app breakdown
+	DailyMinutes     []TimePoint    `json:"daily_minutes"`      // Minutes per day
+	Heatmap          []HeatmapPoint `json:"heatmap"`            // Call activity heatmap
+}
+
+type AppCallStats struct {
+	App     string `json:"app"`
+	Minutes int    `json:"minutes"`
+}
+
+// GetVideoCallStats returns video call statistics for the given time range
+func (t *Tracker) GetVideoCallStats(timeRange string) VideoCallStats {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	stats := VideoCallStats{
+		AppBreakdown: make([]AppCallStats, 0),
+		DailyMinutes: make([]TimePoint, 0),
+		Heatmap:      make([]HeatmapPoint, 0),
+	}
+
+	now := time.Now()
+	var startTime int64
+
+	switch timeRange {
+	case "24h":
+		startTime = now.Add(-24 * time.Hour).Unix()
+	case "7d":
+		startTime = now.Add(-7 * 24 * time.Hour).Unix()
+	case "30d":
+		startTime = now.Add(-30 * 24 * time.Hour).Unix()
+	case "1y":
+		startTime = now.AddDate(-1, 0, 0).Unix()
+	default: // "1h"
+		startTime = now.Add(-60 * time.Minute).Unix()
+	}
+
+	// Total minutes in calls
+	t.db.QueryRow(`
+		SELECT COALESCE(COUNT(*), 0) FROM video_calls WHERE minute >= ? AND in_call = 1
+	`, startTime).Scan(&stats.TotalMinutes)
+
+	// Camera and microphone minutes
+	t.db.QueryRow(`
+		SELECT COALESCE(COUNT(*), 0) FROM video_calls WHERE minute >= ? AND camera_active = 1
+	`, startTime).Scan(&stats.CameraMinutes)
+
+	t.db.QueryRow(`
+		SELECT COALESCE(COUNT(*), 0) FROM video_calls WHERE minute >= ? AND microphone_active = 1
+	`, startTime).Scan(&stats.MicrophoneMinutes)
+
+	// Estimate number of calls (count gaps > 5 minutes as separate calls)
+	stats.TotalCalls = t.estimateCallCount(startTime)
+
+	// Per-app breakdown
+	rows, err := t.db.Query(`
+		SELECT app, COUNT(*) as minutes
+		FROM video_calls
+		WHERE minute >= ? AND in_call = 1 AND app != ''
+		GROUP BY app
+		ORDER BY minutes DESC
+	`, startTime)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var appStats AppCallStats
+			rows.Scan(&appStats.App, &appStats.Minutes)
+			stats.AppBreakdown = append(stats.AppBreakdown, appStats)
+		}
+	}
+
+	// Daily minutes (for calendar view)
+	rowsDaily, err := t.db.Query(`
+		SELECT strftime('%Y-%m-%d', minute, 'unixepoch', 'localtime') as day, COUNT(*) as minutes
+		FROM video_calls
+		WHERE minute >= ? AND in_call = 1
+		GROUP BY day
+		ORDER BY day ASC
+	`, startTime)
+	if err == nil {
+		defer rowsDaily.Close()
+		for rowsDaily.Next() {
+			var dayStr string
+			var minutes int
+			rowsDaily.Scan(&dayStr, &minutes)
+
+			tLocal, err := time.ParseInLocation("2006-01-02", dayStr, time.Local)
+			if err == nil {
+				stats.DailyMinutes = append(stats.DailyMinutes, TimePoint{
+					Time:  tLocal.Unix(),
+					Count: minutes,
+				})
+			}
+		}
+	}
+
+	// Heatmap (minute-level data)
+	rowsHeat, err := t.db.Query(`
+		SELECT minute, in_call FROM video_calls WHERE minute >= ?
+	`, startTime)
+	if err == nil {
+		defer rowsHeat.Close()
+		for rowsHeat.Next() {
+			var ts int64
+			var inCall int
+			rowsHeat.Scan(&ts, &inCall)
+			stats.Heatmap = append(stats.Heatmap, HeatmapPoint{
+				Timestamp: ts,
+				Value:     float64(inCall),
+			})
+		}
+	}
+
+	return stats
+}
+
+// estimateCallCount estimates the number of separate calls by looking for gaps
+func (t *Tracker) estimateCallCount(startTime int64) int {
+	rows, err := t.db.Query(`
+		SELECT minute FROM video_calls
+		WHERE minute >= ? AND in_call = 1
+		ORDER BY minute ASC
+	`, startTime)
+	if err != nil {
+		return 0
+	}
+	defer rows.Close()
+
+	var minutes []int64
+	for rows.Next() {
+		var m int64
+		rows.Scan(&m)
+		minutes = append(minutes, m)
+	}
+
+	if len(minutes) == 0 {
+		return 0
+	}
+
+	// Count calls - a gap of more than 5 minutes means a new call
+	calls := 1
+	for i := 1; i < len(minutes); i++ {
+		if minutes[i]-minutes[i-1] > 5*60 { // 5 minute gap
+			calls++
+		}
+	}
+
+	return calls
+}
+
+// GetVideoCallHeatmap returns heatmap data for video calls
+func (t *Tracker) GetVideoCallHeatmap() []HeatmapPoint {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	var result []HeatmapPoint
+
+	rows, err := t.db.Query(`SELECT minute, in_call FROM video_calls WHERE in_call = 1`)
+	if err != nil {
+		log.Printf("Failed to query video call heatmap: %v", err)
+		return nil
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var ts int64
+		var inCall int
+		rows.Scan(&ts, &inCall)
+		result = append(result, HeatmapPoint{
+			Timestamp: ts,
+			Value:     float64(inCall),
+		})
+	}
+
+	return result
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/victortrac/busygraph/internal/hook"
 	"github.com/victortrac/busygraph/internal/server"
 	"github.com/victortrac/busygraph/internal/tracker"
+	"github.com/victortrac/busygraph/internal/videocall"
 	webview "github.com/webview/webview_go"
 )
 
@@ -60,6 +61,13 @@ func onReady() {
 	// Initialize tracker
 	t := tracker.NewTracker()
 
+	// Initialize video call detector with callback to track state
+	vc := videocall.NewDetector()
+	vc.SetCallback(func(inCall, cameraActive, micActive bool, app string) {
+		t.TrackVideoCall(inCall, cameraActive, micActive, app)
+	})
+	vc.Start(5 * time.Second)
+
 	// Start hook in a goroutine
 	go func() {
 		hook.Start(t)
@@ -67,7 +75,7 @@ func onReady() {
 
 	// Start metrics server in a goroutine
 	go func() {
-		server.Start(":2112", t)
+		server.Start(":2112", t, vc)
 	}()
 
 	// Update stats in menu periodically

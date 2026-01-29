@@ -179,6 +179,57 @@
                 </div>
             </div>
         </div>
+
+        <!-- Video Calls Section -->
+        <h3 style="margin-bottom: 5px; margin-top: 5px; color: #444;">
+            Video Calls
+            <span id="callStatus" class="call-indicator"></span>
+        </h3>
+        <div class="grid" style="margin-bottom: 15px;">
+            <div class="card">
+                <div class="stat-box">
+                    <div class="stat-value" id="callMinutes">0</div>
+                    <div class="stat-label">Minutes in Calls</div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="stat-box">
+                    <div class="stat-value" id="callCount">0</div>
+                    <div class="stat-label">Total Calls</div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="stat-box">
+                    <div class="stat-value">
+                        <span id="cameraMinutes">0</span> / <span id="micMinutes">0</span>
+                    </div>
+                    <div class="stat-label">Camera / Mic Minutes</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid" style="margin-bottom: 15px;">
+            <div class="card">
+                <h4 style="margin-top: 0; margin-bottom: 5px; color: #666;">Call Time by App</h4>
+                <div style="position: relative; height: 155px; width: 100%;">
+                    <canvas id="callAppsChart"></canvas>
+                </div>
+            </div>
+            <div class="card">
+                <h4 style="margin-top: 0; margin-bottom: 5px; color: #666;">Daily Call Minutes</h4>
+                <div style="position: relative; height: 155px; width: 100%;">
+                    <canvas id="callDailyChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Video Call Heatmap -->
+        <div class="card full-width" style="margin-bottom: 10px;">
+            <h2>Video Call Heatmap</h2>
+            <div style="overflow-x: auto;">
+                <canvas id="callHeatmapCanvas"></canvas>
+            </div>
+        </div>
     </div>
 
     <style>
@@ -280,6 +331,26 @@
 
         .day-cell.l4 {
             background-color: #216e39;
+        }
+
+        .call-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-left: 8px;
+            background-color: #ccc;
+        }
+
+        .call-indicator.active {
+            background-color: #e74c3c;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.7); }
+            70% { box-shadow: 0 0 0 8px rgba(231, 76, 60, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0); }
         }
     </style>
 
@@ -655,6 +726,228 @@
             }
         }
         fetchHeatmap();
+
+        // Video Call Charts
+        const ctxCallApps = document.getElementById('callAppsChart').getContext('2d');
+        const ctxCallDaily = document.getElementById('callDailyChart').getContext('2d');
+
+        const callAppsChart = new Chart(ctxCallApps, {
+            type: 'bar',
+            data: { labels: [], datasets: [{ label: 'Minutes', data: [], backgroundColor: '#e74c3c' }] },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: { x: { display: true }, y: { display: true, ticks: { autoSkip: false } } }
+            }
+        });
+
+        const callDailyChart = new Chart(ctxCallDaily, {
+            type: 'bar',
+            data: { labels: [], datasets: [{ label: 'Minutes', data: [], backgroundColor: '#9b59b6' }] },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: { x: { display: true }, y: { beginAtZero: true } }
+            }
+        });
+
+        async function fetchVideoCallStats() {
+            try {
+                // Fetch current call status
+                const statusResp = await fetch('/api/videocall');
+                const status = await statusResp.json();
+
+                const indicator = document.getElementById('callStatus');
+                if (status.in_call) {
+                    indicator.classList.add('active');
+                    indicator.title = 'In call: ' + (status.camera_users || []).join(', ');
+                } else {
+                    indicator.classList.remove('active');
+                    indicator.title = 'Not in a call';
+                }
+
+                // Fetch call stats for current range
+                const statsResp = await fetch('/api/videocall/stats?range=' + currentRange);
+                const stats = await statsResp.json();
+
+                // Update stat cards
+                document.getElementById('callMinutes').innerText = stats.total_minutes || 0;
+                document.getElementById('callCount').innerText = stats.total_calls || 0;
+                document.getElementById('cameraMinutes').innerText = stats.camera_minutes || 0;
+                document.getElementById('micMinutes').innerText = stats.microphone_minutes || 0;
+
+                // Update app breakdown chart
+                if (stats.app_breakdown && stats.app_breakdown.length > 0) {
+                    callAppsChart.data.labels = stats.app_breakdown.map(a => a.app);
+                    callAppsChart.data.datasets[0].data = stats.app_breakdown.map(a => a.minutes);
+                } else {
+                    callAppsChart.data.labels = ['No data'];
+                    callAppsChart.data.datasets[0].data = [0];
+                }
+                callAppsChart.update();
+
+                // Update daily chart
+                if (stats.daily_minutes && stats.daily_minutes.length > 0) {
+                    const labels = stats.daily_minutes.map(d => {
+                        const date = new Date(d.time * 1000);
+                        return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+                    });
+                    callDailyChart.data.labels = labels;
+                    callDailyChart.data.datasets[0].data = stats.daily_minutes.map(d => d.count);
+                } else {
+                    callDailyChart.data.labels = ['No data'];
+                    callDailyChart.data.datasets[0].data = [0];
+                }
+                callDailyChart.update();
+
+            } catch (e) {
+                console.error("Error fetching video call stats:", e);
+            }
+        }
+
+        async function fetchCallHeatmap() {
+            try {
+                const resp = await fetch('/api/videocall/heatmap');
+                const points = await resp.json();
+
+                const canvas = document.getElementById('callHeatmapCanvas');
+                const ctx = canvas.getContext('2d');
+
+                if (!points || points.length === 0) {
+                    // Show empty state
+                    const dpr = window.devicePixelRatio || 1;
+                    canvas.width = 800 * dpr;
+                    canvas.height = 100 * dpr;
+                    canvas.style.width = '800px';
+                    canvas.style.height = '100px';
+                    ctx.scale(dpr, dpr);
+                    ctx.fillStyle = '#f4f4f9';
+                    ctx.fillRect(0, 0, 800, 100);
+                    ctx.fillStyle = '#999';
+                    ctx.font = '14px -apple-system, sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('No video call data yet. Join a call to start tracking!', 400, 50);
+                    return;
+                }
+
+                // Group by local day and minute-of-day
+                const dayMap = {};
+                points.forEach(p => {
+                    const d = new Date(p.ts * 1000);
+                    const day = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+                    const minute = d.getHours() * 60 + d.getMinutes();
+                    if (!dayMap[day]) dayMap[day] = {};
+                    dayMap[day][minute] = (dayMap[day][minute] || 0) + p.value;
+                });
+
+                const days = Object.keys(dayMap).sort();
+                const numDays = days.length;
+                const totalMinutes = 1440;
+
+                const dpr = window.devicePixelRatio || 1;
+                const marginLeft = 50;
+                const marginBottom = 30;
+                const marginTop = 5;
+                const marginRight = 5;
+
+                const containerWidth = canvas.parentElement.clientWidth;
+                const minGridW = containerWidth - marginLeft - marginRight;
+                const gridW = Math.max(minGridW, numDays);
+                const gridH = 200;
+
+                const cssW = gridW + marginLeft + marginRight;
+                const cssH = gridH + marginTop + marginBottom;
+
+                canvas.width = Math.round(cssW * dpr);
+                canvas.height = Math.round(cssH * dpr);
+                canvas.style.width = cssW + 'px';
+                canvas.style.height = cssH + 'px';
+
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                ctx.scale(dpr, dpr);
+
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(0, 0, cssW, cssH);
+
+                const pxPerDay = gridW / numDays;
+                const pxPerMin = gridH / totalMinutes;
+
+                // Highlight weekend columns
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.04)';
+                for (let di = 0; di < numDays; di++) {
+                    const parts = days[di].split('-');
+                    const d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+                    const dow = d.getDay();
+                    if (dow === 0 || dow === 6) {
+                        const x = marginLeft + di * pxPerDay;
+                        const w = Math.max(Math.ceil(pxPerDay), 1);
+                        ctx.fillRect(x, marginTop, w, gridH);
+                    }
+                }
+
+                // Draw call periods (purple/red color scheme)
+                for (let di = 0; di < numDays; di++) {
+                    const day = days[di];
+                    const row = dayMap[day];
+                    if (!row) continue;
+                    const x = marginLeft + di * pxPerDay;
+                    const w = Math.max(Math.ceil(pxPerDay), 1);
+                    for (const mStr in row) {
+                        const m = parseInt(mStr);
+                        const val = row[m];
+                        if (val <= 0) continue;
+                        // Purple for calls
+                        ctx.fillStyle = 'rgba(155, 89, 182, 0.8)';
+                        const y = marginTop + m * pxPerMin;
+                        const h = Math.max(Math.ceil(pxPerMin), 1);
+                        ctx.fillRect(x, y, w, h);
+                    }
+                }
+
+                // Y-axis labels
+                ctx.fillStyle = '#555';
+                ctx.font = '12px -apple-system, sans-serif';
+                ctx.textAlign = 'right';
+                ctx.textBaseline = 'middle';
+                for (let h = 0; h <= 24; h += 3) {
+                    const m = h * 60;
+                    const y = marginTop + m * pxPerMin;
+                    const hr = h % 12 === 0 ? 12 : h % 12;
+                    const ampm = h < 12 || h === 24 ? 'AM' : 'PM';
+                    ctx.fillText(hr + ' ' + ampm, marginLeft - 6, y);
+                }
+
+                // X-axis labels
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
+                const maxLabels = Math.min(numDays, Math.floor(gridW / 60));
+                const step = Math.max(1, Math.floor(numDays / maxLabels));
+                for (let i = 0; i < numDays; i += step) {
+                    const x = marginLeft + (i + 0.5) * pxPerDay;
+                    const parts = days[i].split('-');
+                    const d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+                    const label = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+                    ctx.fillText(label, x, marginTop + gridH + 6);
+                }
+
+                // Border
+                ctx.strokeStyle = '#ccc';
+                ctx.lineWidth = 0.5;
+                ctx.strokeRect(marginLeft, marginTop, gridW, gridH);
+
+            } catch (e) {
+                console.error("Error fetching call heatmap:", e);
+            }
+        }
+
+        // Initial fetch and periodic updates
+        fetchVideoCallStats();
+        fetchCallHeatmap();
+        setInterval(fetchVideoCallStats, 5000);
+        setInterval(fetchCallHeatmap, 30000); // Heatmap updates less frequently
     </script>
 </body>
 
