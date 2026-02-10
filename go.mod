@@ -4,6 +4,7 @@ go 1.25.6
 
 require (
 	github.com/getlantern/systray v1.2.2
+	github.com/holoplot/go-evdev v0.0.0-20250804134636-ab1d56a1fe83
 	github.com/prometheus/client_golang v1.23.2
 	github.com/robotn/gohook v0.42.3
 	github.com/webview/webview_go v0.0.0-20240831120633-6173450d4dd6

@@ -3,25 +3,58 @@
 package videocall
 
 import (
+	"encoding/json"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
-// isCameraActive checks if any camera device is currently in use on Linux
+// isCameraActive checks if any camera device is currently in use on Linux.
 func isCameraActive() bool {
-	// Check if any process has /dev/video* devices open
-	videoDevices := []string{
-		"/dev/video0",
-		"/dev/video1",
-		"/dev/video2",
-		"/dev/video3",
+	// Method 1: PipeWire — check for active video capture streams.
+	// On modern Linux (Arch, Fedora, Ubuntu 22.04+), browsers access cameras
+	// through the PipeWire camera portal rather than opening /dev/video*
+	// directly, so we need to ask PipeWire if any client is capturing video.
+	cmd := exec.Command("pw-dump")
+	if output, err := cmd.Output(); err == nil {
+		// "Stream/Input/Video" is the media.class for an active video capture
+		// stream (e.g. a browser's WebRTC camera feed). It only appears in
+		// pw-dump output when a client is actively capturing.
+		if strings.Contains(string(output), `"Stream/Input/Video"`) {
+			return true
+		}
 	}
 
-	for _, dev := range videoDevices {
-		cmd := exec.Command("lsof", dev)
-		output, err := cmd.Output()
-		if err == nil && len(output) > 0 {
-			return true
+	// Method 2: Scan /proc for processes with /dev/video* fds open.
+	// Covers non-PipeWire systems and native apps that open V4L2 directly.
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		pid := entry.Name()
+		if !entry.IsDir() || pid[0] < '0' || pid[0] > '9' {
+			continue
+		}
+		fdDir := filepath.Join("/proc", pid, "fd")
+		fds, err := os.ReadDir(fdDir)
+		if err != nil {
+			continue
+		}
+		for _, fd := range fds {
+			target, err := os.Readlink(filepath.Join(fdDir, fd.Name()))
+			if err != nil {
+				continue
+			}
+			if strings.HasPrefix(target, "/dev/video") {
+				// Ignore system daemons that hold the device without streaming.
+				comm := readProcComm(pid)
+				if comm == "udevd" || comm == "systemd-udevd" {
+					continue
+				}
+				return true
+			}
 		}
 	}
 
@@ -52,47 +85,75 @@ func isMicrophoneActive() bool {
 	return false
 }
 
-// getCameraUsers returns a list of process names currently using the camera
+// getCameraUsers returns a list of apps currently in a video call.
+// It checks both camera device usage and microphone usage (via PulseAudio/
+// PipeWire) because browser-based calls like Google Meet may only use the mic.
 func getCameraUsers() []string {
-	result := make([]string, 0)
 	seen := make(map[string]bool)
+	var result []string
 
-	videoDevices := []string{
-		"/dev/video0",
-		"/dev/video1",
-		"/dev/video2",
-		"/dev/video3",
+	addApp := func(name string) {
+		if name != "" && !seen[name] {
+			seen[name] = true
+			result = append(result, name)
+		}
 	}
 
-	for _, dev := range videoDevices {
-		cmd := exec.Command("lsof", "-t", dev)
-		output, err := cmd.Output()
+	// 1. Check PipeWire for apps capturing video.
+	cmd := exec.Command("pw-dump")
+	if output, err := cmd.Output(); err == nil {
+		for _, app := range parsePipeWireVideoUsers(string(output)) {
+			addApp(app)
+		}
+	}
+
+	// 2. Scan /proc for processes with /dev/video* fds (non-PipeWire / native apps).
+	entries, _ := os.ReadDir("/proc")
+	for _, entry := range entries {
+		pid := entry.Name()
+		if !entry.IsDir() || pid[0] < '0' || pid[0] > '9' {
+			continue
+		}
+		fdDir := filepath.Join("/proc", pid, "fd")
+		fds, err := os.ReadDir(fdDir)
 		if err != nil {
 			continue
 		}
-
-		// Get PIDs and resolve to process names
-		pids := strings.Split(strings.TrimSpace(string(output)), "\n")
-		for _, pid := range pids {
-			if pid == "" {
-				continue
-			}
-			// Get process name from /proc/PID/comm
-			commCmd := exec.Command("cat", "/proc/"+pid+"/comm")
-			commOutput, err := commCmd.Output()
+		for _, fd := range fds {
+			target, err := os.Readlink(filepath.Join(fdDir, fd.Name()))
 			if err != nil {
 				continue
 			}
-			procName := strings.TrimSpace(string(commOutput))
-			appName := mapLinuxProcessToApp(procName)
-			if appName != "" && !seen[appName] {
-				seen[appName] = true
-				result = append(result, appName)
+			if strings.HasPrefix(target, "/dev/video") {
+				comm := readProcComm(pid)
+				if comm == "udevd" || comm == "systemd-udevd" || comm == "" {
+					continue
+				}
+				addApp(mapLinuxProcessToApp(comm))
 			}
+		}
+	}
+
+	// 3. Check PulseAudio/PipeWire source-outputs (microphone users).
+	//    A browser or known call app using the mic is a strong signal for an
+	//    active video/audio call — this covers Google Meet, Zoom web, etc.
+	//    even when the camera is off.
+	for _, app := range getMicrophoneUsers() {
+		if knownVideoCallApps[app] {
+			addApp(app)
 		}
 	}
 
 	return result
+}
+
+// readProcComm reads /proc/<pid>/comm and returns the trimmed process name.
+func readProcComm(pid string) string {
+	data, err := os.ReadFile("/proc/" + pid + "/comm")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 // getMicrophoneUsers returns a list of process names currently using the microphone
@@ -121,6 +182,45 @@ func getMicrophoneUsers() []string {
 		}
 	}
 
+	return result
+}
+
+// parsePipeWireVideoUsers extracts app names from pw-dump JSON output by
+// looking for nodes with media.class "Stream/Input/Video" (active video
+// capture streams) and reading their application.name property.
+func parsePipeWireVideoUsers(data string) []string {
+	var objects []struct {
+		Info struct {
+			Props map[string]json.RawMessage `json:"props"`
+		} `json:"info"`
+	}
+	if err := json.Unmarshal([]byte(data), &objects); err != nil {
+		return nil
+	}
+
+	var result []string
+	seen := make(map[string]bool)
+	for _, obj := range objects {
+		var mediaClass string
+		if raw, ok := obj.Info.Props["media.class"]; ok {
+			json.Unmarshal(raw, &mediaClass)
+		}
+		if mediaClass != "Stream/Input/Video" {
+			continue
+		}
+		var appName string
+		if raw, ok := obj.Info.Props["application.name"]; ok {
+			json.Unmarshal(raw, &appName)
+		}
+		if appName == "" {
+			continue
+		}
+		mapped := mapLinuxProcessToApp(appName)
+		if mapped != "" && !seen[mapped] {
+			seen[mapped] = true
+			result = append(result, mapped)
+		}
+	}
 	return result
 }
 

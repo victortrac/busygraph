@@ -18,9 +18,15 @@ BusyGraph is a background application for macOS and Linux that tracks your keyst
 ### Prerequisites
 
 -   **Go**: 1.21 or later.
--   **Linux**: Requires X11 headers.
+-   **Linux (Debian/Ubuntu)**:
     ```bash
-    sudo apt-get install libx11-dev libxtst-dev
+    sudo apt-get install libwebkit2gtk-4.0-dev libgtk-3-dev libayatana-appindicator3-dev
+    ```
+-   **Linux (Arch)**:
+    ```bash
+    sudo pacman -S webkit2gtk-4.1 libayatana-appindicator gtk3
+    # webview_go expects webkit2gtk-4.0 pkg-config; create a symlink for the compatible 4.1 package
+    sudo ln -s /usr/lib/pkgconfig/webkit2gtk-4.1.pc /usr/lib/pkgconfig/webkit2gtk-4.0.pc
     ```
 
 ### Building from Source
@@ -46,6 +52,12 @@ go run .
 ```
 
 On **macOS**, you will be prompted to grant "Accessibility" permissions on the first run. This is required to listen to global input events.
+
+On **Linux**, your user must be in the `input` group to read from `/dev/input/event*` devices:
+```bash
+sudo usermod -aG input $USER
+```
+Then log out and back in for the change to take effect.
 
 ### Dashboard
 
