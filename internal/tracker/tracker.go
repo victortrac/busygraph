@@ -725,22 +725,24 @@ func (t *Tracker) GetVideoCallStats(timeRange string) VideoCallStats {
 		startTime = now.Add(-60 * time.Minute).Unix()
 	}
 
-	// Total minutes in calls
+	// Combined query for total, camera, and microphone minutes (single table scan)
 	t.db.QueryRow(`
-		SELECT COALESCE(COUNT(*), 0) FROM all_video_calls WHERE minute >= ? AND in_call = 1
-	`, startTime).Scan(&stats.TotalMinutes)
+		SELECT
+			COALESCE(SUM(CASE WHEN in_call = 1 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN camera_active = 1 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN microphone_active = 1 THEN 1 ELSE 0 END), 0)
+		FROM all_video_calls WHERE minute >= ?
+	`, startTime).Scan(&stats.TotalMinutes, &stats.CameraMinutes, &stats.MicrophoneMinutes)
 
-	// Camera and microphone minutes
+	// Estimate number of calls using window function (count gaps > 5 minutes as separate calls)
 	t.db.QueryRow(`
-		SELECT COALESCE(COUNT(*), 0) FROM all_video_calls WHERE minute >= ? AND camera_active = 1
-	`, startTime).Scan(&stats.CameraMinutes)
-
-	t.db.QueryRow(`
-		SELECT COALESCE(COUNT(*), 0) FROM all_video_calls WHERE minute >= ? AND microphone_active = 1
-	`, startTime).Scan(&stats.MicrophoneMinutes)
-
-	// Estimate number of calls (count gaps > 5 minutes as separate calls)
-	stats.TotalCalls = t.estimateCallCount(startTime)
+		SELECT COALESCE(COUNT(*), 0) FROM (
+			SELECT minute,
+				LAG(minute) OVER (ORDER BY minute) as prev_minute
+			FROM all_video_calls
+			WHERE minute >= ? AND in_call = 1
+		) WHERE prev_minute IS NULL OR minute - prev_minute > 300
+	`, startTime).Scan(&stats.TotalCalls)
 
 	// Per-app breakdown
 	rows, err := t.db.Query(`
@@ -804,39 +806,6 @@ func (t *Tracker) GetVideoCallStats(timeRange string) VideoCallStats {
 	return stats
 }
 
-// estimateCallCount estimates the number of separate calls by looking for gaps
-func (t *Tracker) estimateCallCount(startTime int64) int {
-	rows, err := t.db.Query(`
-		SELECT minute FROM all_video_calls
-		WHERE minute >= ? AND in_call = 1
-		ORDER BY minute ASC
-	`, startTime)
-	if err != nil {
-		return 0
-	}
-	defer rows.Close()
-
-	var minutes []int64
-	for rows.Next() {
-		var m int64
-		rows.Scan(&m)
-		minutes = append(minutes, m)
-	}
-
-	if len(minutes) == 0 {
-		return 0
-	}
-
-	// Count calls - a gap of more than 5 minutes means a new call
-	calls := 1
-	for i := 1; i < len(minutes); i++ {
-		if minutes[i]-minutes[i-1] > 5*60 { // 5 minute gap
-			calls++
-		}
-	}
-
-	return calls
-}
 
 // GetVideoCallHeatmap returns heatmap data for video calls
 func (t *Tracker) GetVideoCallHeatmap() []HeatmapPoint {

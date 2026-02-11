@@ -211,14 +211,20 @@
         <div class="grid" style="margin-bottom: 15px;">
             <div class="card">
                 <h4 style="margin-top: 0; margin-bottom: 5px; color: #666;">Call Time by App</h4>
-                <div style="position: relative; height: 155px; width: 100%;">
+                <div class="chart-container" style="position: relative; height: 155px; width: 100%;">
                     <canvas id="callAppsChart"></canvas>
+                    <div id="callAppsSpinner" class="chart-spinner" style="display: none;">
+                        <div class="spinner"></div>
+                    </div>
                 </div>
             </div>
             <div class="card">
                 <h4 style="margin-top: 0; margin-bottom: 5px; color: #666;">Daily Call Minutes</h4>
-                <div style="position: relative; height: 155px; width: 100%;">
+                <div class="chart-container" style="position: relative; height: 155px; width: 100%;">
                     <canvas id="callDailyChart"></canvas>
+                    <div id="callDailySpinner" class="chart-spinner" style="display: none;">
+                        <div class="spinner"></div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -351,6 +357,36 @@
             0% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.7); }
             70% { box-shadow: 0 0 0 8px rgba(231, 76, 60, 0); }
             100% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0); }
+        }
+
+        .chart-container {
+            position: relative;
+        }
+
+        .chart-spinner {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255, 255, 255, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+        }
+
+        .spinner {
+            width: 24px;
+            height: 24px;
+            border: 3px solid #e0e0e0;
+            border-top-color: #9b59b6;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
         }
     </style>
 
@@ -509,6 +545,7 @@
         }
 
         let currentRange = '1h';
+        let heatmapDays = null; // Shared date range for aligned heatmaps
 
         function setRange(range) {
             currentRange = range;
@@ -518,6 +555,7 @@
 
             // Re-fetch immediately
             fetchStats();
+            fetchVideoCallStats(true); // Show spinners on range change
         }
 
         async function fetchStats() {
@@ -613,6 +651,7 @@
                 });
 
                 const days = Object.keys(dayMap).sort();
+                heatmapDays = days; // Store for shared use with call heatmap
                 const numDays = days.length;
                 const totalMinutes = 1440;
 
@@ -725,7 +764,6 @@
                 console.error("Error fetching heatmap:", e);
             }
         }
-        fetchHeatmap();
 
         // Video Call Charts
         const ctxCallApps = document.getElementById('callAppsChart').getContext('2d');
@@ -754,8 +792,17 @@
             }
         });
 
-        async function fetchVideoCallStats() {
+        async function fetchVideoCallStats(showSpinners = false) {
+            const appsSpinner = document.getElementById('callAppsSpinner');
+            const dailySpinner = document.getElementById('callDailySpinner');
+
             try {
+                // Show spinners only when explicitly requested (e.g., range change)
+                if (showSpinners) {
+                    appsSpinner.style.display = 'flex';
+                    dailySpinner.style.display = 'flex';
+                }
+
                 // Fetch current call status
                 const statusResp = await fetch('/api/videocall');
                 const status = await statusResp.json();
@@ -805,6 +852,10 @@
 
             } catch (e) {
                 console.error("Error fetching video call stats:", e);
+            } finally {
+                // Always hide spinners when done
+                appsSpinner.style.display = 'none';
+                dailySpinner.style.display = 'none';
             }
         }
 
@@ -816,34 +867,24 @@
                 const canvas = document.getElementById('callHeatmapCanvas');
                 const ctx = canvas.getContext('2d');
 
-                if (!points || points.length === 0) {
-                    // Show empty state
-                    const dpr = window.devicePixelRatio || 1;
-                    canvas.width = 800 * dpr;
-                    canvas.height = 100 * dpr;
-                    canvas.style.width = '800px';
-                    canvas.style.height = '100px';
-                    ctx.scale(dpr, dpr);
-                    ctx.fillStyle = '#f4f4f9';
-                    ctx.fillRect(0, 0, 800, 100);
-                    ctx.fillStyle = '#999';
-                    ctx.font = '14px -apple-system, sans-serif';
-                    ctx.textAlign = 'center';
-                    ctx.fillText('No video call data yet. Join a call to start tracking!', 400, 50);
-                    return;
-                }
-
                 // Group by local day and minute-of-day
                 const dayMap = {};
-                points.forEach(p => {
-                    const d = new Date(p.ts * 1000);
-                    const day = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
-                    const minute = d.getHours() * 60 + d.getMinutes();
-                    if (!dayMap[day]) dayMap[day] = {};
-                    dayMap[day][minute] = (dayMap[day][minute] || 0) + p.value;
-                });
+                if (points && points.length > 0) {
+                    points.forEach(p => {
+                        const d = new Date(p.ts * 1000);
+                        const day = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+                        const minute = d.getHours() * 60 + d.getMinutes();
+                        if (!dayMap[day]) dayMap[day] = {};
+                        dayMap[day][minute] = (dayMap[day][minute] || 0) + p.value;
+                    });
+                }
 
-                const days = Object.keys(dayMap).sort();
+                // Use the same date range as the Daily Activity Heatmap
+                if (!heatmapDays || heatmapDays.length === 0) {
+                    // Fallback if activity heatmap hasn't loaded yet
+                    return;
+                }
+                const days = heatmapDays;
                 const numDays = days.length;
                 const totalMinutes = 1440;
 
@@ -945,9 +986,10 @@
 
         // Initial fetch and periodic updates
         fetchVideoCallStats();
-        fetchCallHeatmap();
+        // Fetch call heatmap after activity heatmap loads (to get shared date range)
+        fetchHeatmap().then(() => fetchCallHeatmap());
         setInterval(fetchVideoCallStats, 5000);
-        setInterval(fetchCallHeatmap, 30000); // Heatmap updates less frequently
+        setInterval(() => fetchHeatmap().then(() => fetchCallHeatmap()), 30000); // Heatmaps update together
     </script>
 </body>
 
