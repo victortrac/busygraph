@@ -118,6 +118,29 @@
 
 
         <!-- 3. Dynamic Stats & Charts -->
+        <!-- Activity Section -->
+        <h3 style="margin-top: 5px; margin-bottom: 5px; color: #444;">Activity</h3>
+        <div class="grid" style="margin-bottom: 15px;">
+            <div class="card">
+                <div class="stat-box">
+                    <div class="stat-value" id="busiestHour">-</div>
+                    <div class="stat-label">Busiest Hour</div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="stat-box">
+                    <div class="stat-value" id="busiestDay">-</div>
+                    <div class="stat-label">Busiest Day</div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="stat-box">
+                    <div class="stat-value" id="avgCallMinutes">-</div>
+                    <div class="stat-label">Avg Call Min / Day</div>
+                </div>
+            </div>
+        </div>
+
         <!-- Keyboard Section -->
         <h3 style="margin-top: 5px; margin-bottom: 5px; color: #444;">Keyboard</h3>
         <div class="grid" style="margin-bottom: 15px;">
@@ -622,6 +645,29 @@
 
                 // Update Heatmap
                 renderHeatmap(data.calendar);
+
+                // Update Activity Insights
+                if (data.busiest_hour >= 0) {
+                    const h = data.busiest_hour;
+                    const suffix = h >= 12 ? 'PM' : 'AM';
+                    const hr = h % 12 === 0 ? 12 : h % 12;
+                    document.getElementById('busiestHour').innerText = hr + ' ' + suffix;
+                } else {
+                    document.getElementById('busiestHour').innerText = '-';
+                }
+
+                if (data.busiest_day >= 0) {
+                    const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+                    document.getElementById('busiestDay').innerText = dayNames[data.busiest_day];
+                } else {
+                    document.getElementById('busiestDay').innerText = '-';
+                }
+
+                if (data.avg_call_minutes_per_day > 0) {
+                    document.getElementById('avgCallMinutes').innerText = data.avg_call_minutes_per_day.toFixed(1);
+                } else {
+                    document.getElementById('avgCallMinutes').innerText = '-';
+                }
 
             } catch (e) {
                 console.error("Error fetching stats:", e);

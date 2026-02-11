@@ -43,14 +43,17 @@ type VideoCallState struct {
 }
 
 type Stats struct {
-	Total     int            `json:"total"`
-	KPM       KPMStats       `json:"kpm"`
-	Typing    TypingStats    `json:"typing"`
-	TopKeys   []KeyCount     `json:"top_keys"`
-	History   []TimePoint    `json:"history"`  // Last 60 minutes
-	Calendar  []TimePoint    `json:"calendar"` // Daily counts for the last year
-	Mouse     MouseStats     `json:"mouse"`
-	VideoCall VideoCallState `json:"video_call"`
+	Total                int            `json:"total"`
+	KPM                  KPMStats       `json:"kpm"`
+	Typing               TypingStats    `json:"typing"`
+	TopKeys              []KeyCount     `json:"top_keys"`
+	History              []TimePoint    `json:"history"`  // Last 60 minutes
+	Calendar             []TimePoint    `json:"calendar"` // Daily counts for the last year
+	Mouse                MouseStats     `json:"mouse"`
+	VideoCall            VideoCallState `json:"video_call"`
+	BusiestHour          int            `json:"busiest_hour"`            // 0-23, -1 if no data
+	BusiestDay           int            `json:"busiest_day"`             // 0=Sunday..6=Saturday, -1 if no data
+	AvgCallMinutesPerDay float64        `json:"avg_call_minutes_per_day"`
 }
 
 type TypingStats struct {
@@ -382,10 +385,12 @@ func (t *Tracker) GetStats(timeRange string) Stats {
 	defer t.mu.Unlock()
 
 	stats := Stats{
-		Total:    0,
-		TopKeys:  make([]KeyCount, 0),
-		History:  make([]TimePoint, 0),
-		Calendar: make([]TimePoint, 0),
+		Total:       0,
+		TopKeys:     make([]KeyCount, 0),
+		History:     make([]TimePoint, 0),
+		Calendar:    make([]TimePoint, 0),
+		BusiestHour: -1,
+		BusiestDay:  -1,
 	}
 
 	now := time.Now()
@@ -587,6 +592,56 @@ func (t *Tracker) GetStats(timeRange string) Stats {
 		stats.Typing.CharsPerBackspace = float64(nonBackspaceChars) / float64(backspaceCount)
 	} else {
 		stats.Typing.CharsPerBackspace = 0 // No backspaces yet
+	}
+
+	// 8. Activity Insights
+
+	// Busiest hour of day
+	var busiestHour int
+	err = t.db.QueryRow(`
+		SELECT strftime('%H', minute, 'unixepoch', 'localtime') as hour, COUNT(*) as active_minutes
+		FROM (
+			SELECT DISTINCT minute FROM all_keystrokes WHERE minute >= ?
+			UNION
+			SELECT minute FROM all_video_calls WHERE minute >= ? AND in_call = 1
+		)
+		GROUP BY hour
+		ORDER BY active_minutes DESC
+		LIMIT 1
+	`, startTime, startTime).Scan(&busiestHour, new(int))
+	if err == nil {
+		stats.BusiestHour = busiestHour
+	}
+
+	// Busiest day of week
+	var busiestDay int
+	err = t.db.QueryRow(`
+		SELECT strftime('%w', minute, 'unixepoch', 'localtime') as dow, COUNT(*) as active_minutes
+		FROM (
+			SELECT DISTINCT minute FROM all_keystrokes WHERE minute >= ?
+			UNION
+			SELECT minute FROM all_video_calls WHERE minute >= ? AND in_call = 1
+		)
+		GROUP BY dow
+		ORDER BY active_minutes DESC
+		LIMIT 1
+	`, startTime, startTime).Scan(&busiestDay, new(int))
+	if err == nil {
+		stats.BusiestDay = busiestDay
+	}
+
+	// Avg call minutes per day
+	var totalCallMinutes int
+	err = t.db.QueryRow(`
+		SELECT COALESCE(SUM(CASE WHEN in_call = 1 THEN 1 ELSE 0 END), 0)
+		FROM all_video_calls WHERE minute >= ?
+	`, startTime).Scan(&totalCallMinutes)
+	if err == nil {
+		days := float64(nowUnix-startTime) / 86400.0
+		if days < 1 {
+			days = 1
+		}
+		stats.AvgCallMinutesPerDay = float64(totalCallMinutes) / days
 	}
 
 	return stats
