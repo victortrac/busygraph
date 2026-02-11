@@ -73,9 +73,21 @@ Prometheus metrics are available at:
 
 BusyGraph stores its data in a SQLite database located at:
 
--   **Linux/macOS**: `$XDG_DATA_HOME/busygraph/busygraph.db` (usually `~/.local/share/busygraph/busygraph.db`)
+-   **Linux/macOS**: `$XDG_DATA_HOME/busygraph/<hostname>.db` (usually `~/.local/share/busygraph/<hostname>.db`)
 
-You can back up or migrate this file to preserve your history.
+On first run, if a legacy `busygraph.db` exists it is automatically renamed to `<hostname>.db`.
+
+### Multi-Machine Federation
+
+If you use BusyGraph on multiple machines, you can consolidate all their data into a single dashboard view. Each machine names its database after its hostname (e.g. `laptop.db`, `desktop.db`). Sync the data directory between machines using [Syncthing](https://syncthing.net/), rsync, or any file sync tool so that all `*.db` files end up in the same directory on each machine.
+
+BusyGraph automatically discovers and attaches any peer `*.db` files it finds in the data directory (every 30 seconds). Read queries (dashboard, heatmaps, stats) combine data from all attached databases via `UNION ALL` views. Writes always go to the local machine's own database only, so there are no conflicts.
+
+**Setup:**
+
+1. Install BusyGraph on each machine and run it once so it creates `<hostname>.db`.
+2. Configure Syncthing (or similar) to sync `~/.local/share/busygraph/` across your machines.
+3. That's it — the dashboard will show combined activity from all machines within 30 seconds of a new DB file appearing.
 
 ## Contributing
 

@@ -2,10 +2,12 @@ package tracker
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,8 +60,11 @@ type TypingStats struct {
 
 // Tracker maintains the state of keystrokes
 type Tracker struct {
-	mu sync.Mutex
-	db *sql.DB
+	mu       sync.Mutex
+	db       *sql.DB
+	dataDir  string
+	hostname string
+	attached map[string]string // filename -> SQL alias
 }
 
 // NewTracker creates a new Tracker instance and initializes DB
@@ -79,11 +84,37 @@ func NewTracker() *Tracker {
 		log.Fatalf("Failed to create data directory %s: %v", appDir, err)
 	}
 
-	dbPath := filepath.Join(appDir, "busygraph.db")
-	db, err := sql.Open("sqlite", dbPath)
+	hostname, err := os.Hostname()
+	if err != nil {
+		log.Fatalf("Failed to get hostname: %v", err)
+	}
+
+	// Migration: rename legacy busygraph.db to <hostname>.db
+	legacyPath := filepath.Join(appDir, "busygraph.db")
+	hostPath := filepath.Join(appDir, hostname+".db")
+	if _, err := os.Stat(legacyPath); err == nil {
+		if _, err := os.Stat(hostPath); os.IsNotExist(err) {
+			log.Printf("Migrating %s -> %s", legacyPath, hostPath)
+			if err := os.Rename(legacyPath, hostPath); err != nil {
+				log.Fatalf("Failed to migrate database: %v", err)
+			}
+			// Also migrate sidecar files
+			for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+				old := legacyPath + suffix
+				if _, err := os.Stat(old); err == nil {
+					os.Rename(old, hostPath+suffix)
+				}
+			}
+		}
+	}
+
+	db, err := sql.Open("sqlite", hostPath)
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
+
+	// Pin to 1 connection so ATTACH and TEMP VIEWs are visible to all queries.
+	db.SetMaxOpenConns(1)
 
 	// Create tables
 	_, err = db.Exec(`
@@ -112,11 +143,133 @@ func NewTracker() *Tracker {
 	}
 
 	t := &Tracker{
-		db: db,
+		db:       db,
+		dataDir:  appDir,
+		hostname: hostname,
+		attached: make(map[string]string),
 	}
 
+	t.refreshAttachedLocked()
+
 	go t.flushLoop()
+	go t.refreshLoop()
 	return t
+}
+
+func (t *Tracker) refreshLoop() {
+	ticker := time.NewTicker(30 * time.Second)
+	for range ticker.C {
+		t.refreshAttached()
+	}
+}
+
+func (t *Tracker) refreshAttached() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.refreshAttachedLocked()
+}
+
+func (t *Tracker) refreshAttachedLocked() {
+	matches, err := filepath.Glob(filepath.Join(t.dataDir, "*.db"))
+	if err != nil {
+		log.Printf("Failed to glob data dir: %v", err)
+		return
+	}
+
+	ownFile := t.hostname + ".db"
+	// Build set of current DB files (excluding own and legacy)
+	current := make(map[string]bool)
+	for _, m := range matches {
+		base := filepath.Base(m)
+		if base == ownFile || base == "busygraph.db" {
+			continue
+		}
+		current[base] = true
+	}
+
+	// Detach DBs whose files no longer exist
+	for fname, alias := range t.attached {
+		if !current[fname] {
+			_, err := t.db.Exec("DETACH DATABASE " + alias)
+			if err != nil {
+				log.Printf("Failed to detach %s: %v", alias, err)
+			}
+			delete(t.attached, fname)
+		}
+	}
+
+	// Attach new DB files
+	changed := false
+	for fname := range current {
+		if _, ok := t.attached[fname]; ok {
+			continue
+		}
+		alias := sanitizeAlias(fname)
+		path := filepath.Join(t.dataDir, fname)
+		_, err := t.db.Exec(fmt.Sprintf("ATTACH DATABASE ? AS %s", alias), path)
+		if err != nil {
+			log.Printf("Failed to attach %s: %v", fname, err)
+			continue
+		}
+		if !hasExpectedTables(t.db, alias) {
+			log.Printf("Detaching %s: missing expected tables", fname)
+			t.db.Exec("DETACH DATABASE " + alias)
+			continue
+		}
+		t.attached[fname] = alias
+		changed = true
+		log.Printf("Attached %s as %s", fname, alias)
+	}
+
+	if changed || len(t.attached) == 0 {
+		t.recreateViews()
+	}
+}
+
+func (t *Tracker) recreateViews() {
+	tables := []string{"keystrokes", "mouse_metrics", "video_calls"}
+	for _, table := range tables {
+		t.db.Exec("DROP VIEW IF EXISTS all_" + table)
+
+		parts := []string{"SELECT * FROM main." + table}
+		for _, alias := range t.attached {
+			parts = append(parts, "SELECT * FROM "+alias+"."+table)
+		}
+
+		query := "CREATE TEMP VIEW all_" + table + " AS " + strings.Join(parts, " UNION ALL ")
+		_, err := t.db.Exec(query)
+		if err != nil {
+			log.Printf("Failed to create view all_%s: %v", table, err)
+		}
+	}
+}
+
+func sanitizeAlias(filename string) string {
+	name := strings.TrimSuffix(filename, ".db")
+	var b strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	return "db_" + b.String()
+}
+
+func hasExpectedTables(db *sql.DB, alias string) bool {
+	rows, err := db.Query(
+		fmt.Sprintf("SELECT name FROM %s.sqlite_master WHERE type='table' AND name IN ('keystrokes','mouse_metrics','video_calls')", alias),
+	)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		count++
+	}
+	return count == 3
 }
 
 // Mouse buffering
@@ -267,15 +420,15 @@ func (t *Tracker) GetStats(timeRange string) Stats {
 	}
 
 	// 1. Total (Dynamic)
-	t.db.QueryRow(`SELECT COALESCE(SUM(count), 0) FROM keystrokes WHERE minute >= ?`, startTime).Scan(&stats.Total)
+	t.db.QueryRow(`SELECT COALESCE(SUM(count), 0) FROM all_keystrokes WHERE minute >= ?`, startTime).Scan(&stats.Total)
 
 	// 2. Top Keys (Dynamic Range)
 	rows, err := t.db.Query(`
-		SELECT key_char, SUM(count) as total 
-		FROM keystrokes 
-		WHERE minute >= ? 
-		GROUP BY key_char 
-		ORDER BY total DESC 
+		SELECT key_char, SUM(count) as total
+		FROM all_keystrokes
+		WHERE minute >= ?
+		GROUP BY key_char
+		ORDER BY total DESC
 		LIMIT 10
 	`, startTime)
 	if err == nil {
@@ -290,14 +443,14 @@ func (t *Tracker) GetStats(timeRange string) Stats {
 	// 3. History (Dynamic Range & Aggregation)
 	var query string
 	if groupBySeconds == 60 {
-		query = `SELECT minute, SUM(count) FROM keystrokes WHERE minute >= ? GROUP BY minute ORDER BY minute ASC`
+		query = `SELECT minute, SUM(count) FROM all_keystrokes WHERE minute >= ? GROUP BY minute ORDER BY minute ASC`
 	} else {
 		// Aggregate by larger bucket
 		// We use integer division to bucket
 		query = `
-			SELECT CAST(minute / ? AS INTEGER) * ? as bucket, SUM(count) 
-			FROM keystrokes 
-			WHERE minute >= ? 
+			SELECT CAST(minute / ? AS INTEGER) * ? as bucket, SUM(count)
+			FROM all_keystrokes
+			WHERE minute >= ?
 			GROUP BY bucket
 			ORDER BY bucket ASC
 		`
@@ -343,7 +496,7 @@ func (t *Tracker) GetStats(timeRange string) Stats {
 	calendarStart := now.AddDate(0, 0, -365).Unix()
 	rowsCal, err := t.db.Query(`
 		SELECT strftime('%Y-%m-%d', minute, 'unixepoch', 'localtime') as day, SUM(count)
-		FROM keystrokes
+		FROM all_keystrokes
 		WHERE minute >= ?
 		GROUP BY day
 		ORDER BY day ASC
@@ -371,7 +524,7 @@ func (t *Tracker) GetStats(timeRange string) Stats {
 	// Need to aggregate by metric name over the selected time range
 	rowsMouse, err := t.db.Query(`
 		SELECT metric_name, SUM(value)
-		FROM mouse_metrics
+		FROM all_mouse_metrics
 		WHERE minute >= ?
 		GROUP BY metric_name
 	`, startTime)
@@ -407,7 +560,7 @@ func (t *Tracker) GetStats(timeRange string) Stats {
 	err = t.db.QueryRow(`
 		SELECT COALESCE(MAX(minute_total), 0) FROM (
 			SELECT SUM(count) as minute_total
-			FROM keystrokes
+			FROM all_keystrokes
 			WHERE minute >= ?
 			GROUP BY minute
 		)
@@ -420,7 +573,7 @@ func (t *Tracker) GetStats(timeRange string) Stats {
 	var backspaceCount int
 	err = t.db.QueryRow(`
 		SELECT COALESCE(SUM(count), 0)
-		FROM keystrokes
+		FROM all_keystrokes
 		WHERE minute >= ? AND key_char = '[BACKSPACE]'
 	`, startTime).Scan(&backspaceCount)
 	if err != nil {
@@ -451,7 +604,7 @@ func (t *Tracker) GetHeatmap() []HeatmapPoint {
 	data := make(map[int64]float64)
 
 	// Keystroke counts per minute bucket
-	rows, err := t.db.Query(`SELECT minute, SUM(count) FROM keystrokes GROUP BY minute`)
+	rows, err := t.db.Query(`SELECT minute, SUM(count) FROM all_keystrokes GROUP BY minute`)
 	if err != nil {
 		log.Printf("Failed to query heatmap keystrokes: %v", err)
 		return nil
@@ -465,7 +618,7 @@ func (t *Tracker) GetHeatmap() []HeatmapPoint {
 	}
 
 	// Mouse distance per minute bucket
-	rowsMouse, err := t.db.Query(`SELECT minute, SUM(value) FROM mouse_metrics WHERE metric_name = 'distance' GROUP BY minute`)
+	rowsMouse, err := t.db.Query(`SELECT minute, SUM(value) FROM all_mouse_metrics WHERE metric_name = 'distance' GROUP BY minute`)
 	if err == nil {
 		defer rowsMouse.Close()
 		for rowsMouse.Next() {
@@ -574,16 +727,16 @@ func (t *Tracker) GetVideoCallStats(timeRange string) VideoCallStats {
 
 	// Total minutes in calls
 	t.db.QueryRow(`
-		SELECT COALESCE(COUNT(*), 0) FROM video_calls WHERE minute >= ? AND in_call = 1
+		SELECT COALESCE(COUNT(*), 0) FROM all_video_calls WHERE minute >= ? AND in_call = 1
 	`, startTime).Scan(&stats.TotalMinutes)
 
 	// Camera and microphone minutes
 	t.db.QueryRow(`
-		SELECT COALESCE(COUNT(*), 0) FROM video_calls WHERE minute >= ? AND camera_active = 1
+		SELECT COALESCE(COUNT(*), 0) FROM all_video_calls WHERE minute >= ? AND camera_active = 1
 	`, startTime).Scan(&stats.CameraMinutes)
 
 	t.db.QueryRow(`
-		SELECT COALESCE(COUNT(*), 0) FROM video_calls WHERE minute >= ? AND microphone_active = 1
+		SELECT COALESCE(COUNT(*), 0) FROM all_video_calls WHERE minute >= ? AND microphone_active = 1
 	`, startTime).Scan(&stats.MicrophoneMinutes)
 
 	// Estimate number of calls (count gaps > 5 minutes as separate calls)
@@ -592,7 +745,7 @@ func (t *Tracker) GetVideoCallStats(timeRange string) VideoCallStats {
 	// Per-app breakdown
 	rows, err := t.db.Query(`
 		SELECT app, COUNT(*) as minutes
-		FROM video_calls
+		FROM all_video_calls
 		WHERE minute >= ? AND in_call = 1 AND app != ''
 		GROUP BY app
 		ORDER BY minutes DESC
@@ -609,7 +762,7 @@ func (t *Tracker) GetVideoCallStats(timeRange string) VideoCallStats {
 	// Daily minutes (for calendar view)
 	rowsDaily, err := t.db.Query(`
 		SELECT strftime('%Y-%m-%d', minute, 'unixepoch', 'localtime') as day, COUNT(*) as minutes
-		FROM video_calls
+		FROM all_video_calls
 		WHERE minute >= ? AND in_call = 1
 		GROUP BY day
 		ORDER BY day ASC
@@ -633,7 +786,7 @@ func (t *Tracker) GetVideoCallStats(timeRange string) VideoCallStats {
 
 	// Heatmap (minute-level data)
 	rowsHeat, err := t.db.Query(`
-		SELECT minute, in_call FROM video_calls WHERE minute >= ?
+		SELECT minute, in_call FROM all_video_calls WHERE minute >= ?
 	`, startTime)
 	if err == nil {
 		defer rowsHeat.Close()
@@ -654,7 +807,7 @@ func (t *Tracker) GetVideoCallStats(timeRange string) VideoCallStats {
 // estimateCallCount estimates the number of separate calls by looking for gaps
 func (t *Tracker) estimateCallCount(startTime int64) int {
 	rows, err := t.db.Query(`
-		SELECT minute FROM video_calls
+		SELECT minute FROM all_video_calls
 		WHERE minute >= ? AND in_call = 1
 		ORDER BY minute ASC
 	`, startTime)
@@ -692,7 +845,7 @@ func (t *Tracker) GetVideoCallHeatmap() []HeatmapPoint {
 
 	var result []HeatmapPoint
 
-	rows, err := t.db.Query(`SELECT minute, in_call FROM video_calls WHERE in_call = 1`)
+	rows, err := t.db.Query(`SELECT minute, in_call FROM all_video_calls WHERE in_call = 1`)
 	if err != nil {
 		log.Printf("Failed to query video call heatmap: %v", err)
 		return nil
