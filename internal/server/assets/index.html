@@ -650,7 +650,19 @@
                     if (dayMap[day][minute] > maxVal) maxVal = dayMap[day][minute];
                 });
 
-                const days = Object.keys(dayMap).sort();
+                // Build complete date range from first data day to today
+                const dataDays = Object.keys(dayMap).sort();
+                const days = [];
+                if (dataDays.length > 0) {
+                    const firstParts = dataDays[0].split('-');
+                    const cur = new Date(parseInt(firstParts[0]), parseInt(firstParts[1]) - 1, parseInt(firstParts[2]));
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    while (cur <= today) {
+                        days.push(cur.getFullYear() + '-' + String(cur.getMonth()+1).padStart(2,'0') + '-' + String(cur.getDate()).padStart(2,'0'));
+                        cur.setDate(cur.getDate() + 1);
+                    }
+                }
                 heatmapDays = days; // Store for shared use with call heatmap
                 const numDays = days.length;
                 const totalMinutes = 1440;
@@ -880,11 +892,8 @@
                 }
 
                 // Use the same date range as the Daily Activity Heatmap
-                if (!heatmapDays || heatmapDays.length === 0) {
-                    // Fallback if activity heatmap hasn't loaded yet
-                    return;
-                }
-                const days = heatmapDays;
+                const days = heatmapDays || [];
+                if (days.length === 0) return;
                 const numDays = days.length;
                 const totalMinutes = 1440;
 
