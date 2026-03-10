@@ -128,16 +128,44 @@ func formatNumber(n int) string {
 }
 
 func openBrowser(url string) {
-	var err error
+	var commands [][]string
 	switch runtime.GOOS {
 	case "darwin":
-		err = exec.Command("open", url).Start()
+		commands = [][]string{
+			{"open", url},
+		}
 	case "linux":
-		err = exec.Command("xdg-open", url).Start()
+		commands = [][]string{
+			{"xdg-open", url},
+			{"gio", "open", url},
+			{"sensible-browser", url},
+			{"x-www-browser", url},
+		}
 	}
-	if err != nil {
-		log.Printf("Error opening browser: %v", err)
+
+	if len(commands) == 0 {
+		log.Printf("Error opening browser: unsupported OS %q", runtime.GOOS)
+		return
 	}
+
+	var lastErr error
+	for _, args := range commands {
+		if _, err := exec.LookPath(args[0]); err != nil {
+			lastErr = err
+			continue
+		}
+
+		cmd := exec.Command(args[0], args[1:]...)
+		if err := cmd.Start(); err != nil {
+			lastErr = err
+			continue
+		}
+
+		log.Printf("Opened dashboard using %q", args[0])
+		return
+	}
+
+	log.Printf("Error opening browser for %s: %v", url, lastErr)
 }
 
 func getMiniLockPath() string {
