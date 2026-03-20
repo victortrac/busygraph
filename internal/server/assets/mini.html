@@ -7,123 +7,338 @@
     <title>BusyGraph Quick Stats</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
+        :root {
+            color-scheme: light;
+            --bg: #eff2f7;
+            --bg-strong: #e6ebf3;
+            --panel: #f8fafc;
+            --panel-strong: #ffffff;
+            --border: #d6dde8;
+            --text: #121923;
+            --muted: #566477;
+            --subtle: #7e8ba0;
+            --shadow: 0 18px 42px rgba(15, 23, 36, 0.08);
+            --accent-keyboard: #356fe4;
+            --accent-keyboard-fill: rgba(53, 111, 228, 0.16);
+            --gridline: rgba(93, 108, 130, 0.18);
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                color-scheme: dark;
+                --bg: #0f141b;
+                --bg-strong: #131a23;
+                --panel: #171f2a;
+                --panel-strong: #1b2430;
+                --border: #2b3746;
+                --text: #edf2fa;
+                --muted: #a9b4c6;
+                --subtle: #7c899f;
+                --shadow: 0 22px 48px rgba(0, 0, 0, 0.34);
+                --accent-keyboard: #81a9ff;
+                --accent-keyboard-fill: rgba(129, 169, 255, 0.18);
+                --gridline: rgba(255, 255, 255, 0.09);
+            }
+        }
+
         * {
-            margin: 0;
-            padding: 0;
             box-sizing: border-box;
         }
 
+        html,
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: #fff;
-            padding: 15px;
-            overflow: hidden;
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
+            margin: 0;
+            min-height: 100%;
         }
 
-        .header {
-            text-align: center;
-            margin-bottom: 15px;
+        body {
+            font-family: "Avenir Next", "Segoe UI Variable", "SF Pro Text", "Segoe UI", sans-serif;
+            background:
+                radial-gradient(circle at top left, rgba(255, 255, 255, 0.42), transparent 30%),
+                linear-gradient(180deg, var(--bg), var(--bg-strong));
+            color: var(--text);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .mini-shell {
+            min-height: 100vh;
+            padding: 16px;
+            display: flex;
+        }
+
+        .mini-panel {
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+            border-radius: 22px;
+            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.72);
+            box-shadow: var(--shadow);
+            padding: 18px;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            .mini-panel {
+                background: rgba(27, 36, 48, 0.92);
+            }
+        }
+
+        .mini-header,
+        .mini-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 12px;
+        }
+
+        .mini-title {
+            margin: 0;
+            color: var(--subtle);
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
         }
 
         h1 {
-            font-size: 1.2rem;
-            font-weight: 600;
-            margin-bottom: 5px;
+            margin: 6px 0 0;
+            font-size: 1.35rem;
+            line-height: 1;
+            letter-spacing: -0.03em;
+        }
+
+        .mini-meta {
+            flex-direction: column;
+            align-items: flex-end;
+        }
+
+        .mini-meta-label {
+            color: var(--subtle);
+            font-size: 0.68rem;
+            font-weight: 700;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+        }
+
+        .mini-meta-value {
+            color: var(--muted);
+            font-size: 0.75rem;
+        }
+
+        .mini-hero {
+            display: grid;
+            gap: 6px;
+            padding: 16px 18px;
+            border-radius: 18px;
+            border: 1px solid var(--border);
+            background: var(--panel);
+        }
+
+        .mini-hero-label {
+            color: var(--subtle);
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
         }
 
         .current-kpm {
-            font-size: 2.5rem;
-            font-weight: bold;
-            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+            color: var(--text);
+            font-size: clamp(2.6rem, 10vw, 3.5rem);
+            font-weight: 700;
+            letter-spacing: -0.05em;
+            line-height: 0.94;
         }
 
-        .kpm-label {
+        .mini-hero-caption {
+            color: var(--muted);
             font-size: 0.9rem;
-            opacity: 0.9;
-            margin-top: 2px;
+            line-height: 1.5;
         }
 
-        .chart-container {
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
-            border-radius: 12px;
-            padding: 15px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            position: relative;
+        .chart-card {
+            border-radius: 18px;
+            border: 1px solid var(--border);
+            background: var(--panel);
+            padding: 14px;
+        }
+
+        .chart-title {
+            margin: 0 0 10px;
+            color: var(--muted);
+            font-size: 0.78rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
         }
 
         .chart-wrapper {
-            height: 180px;
             position: relative;
+            height: 210px;
         }
 
         .stats-row {
-            display: flex;
-            justify-content: space-around;
-            margin-top: 10px;
-            padding-top: 10px;
-            border-top: 1px solid rgba(255, 255, 255, 0.2);
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px;
         }
 
         .stat-item {
-            text-align: center;
-        }
-
-        .stat-value {
-            font-size: 1.1rem;
-            font-weight: bold;
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            background: var(--panel);
+            padding: 12px;
         }
 
         .stat-label {
-            font-size: 0.75rem;
-            opacity: 0.8;
-            margin-top: 2px;
+            margin: 0 0 8px;
+            color: var(--subtle);
+            font-size: 0.68rem;
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
         }
 
-        .last-update {
-            text-align: center;
-            font-size: 0.7rem;
-            opacity: 0.7;
-            margin-top: 8px;
+        .stat-value {
+            color: var(--text);
+            font-size: 1.35rem;
+            font-weight: 700;
+            letter-spacing: -0.03em;
+        }
+
+        .mini-footer {
+            color: var(--muted);
+            font-size: 0.78rem;
+            line-height: 1.5;
+        }
+
+        @media (max-width: 420px) {
+            .mini-shell {
+                padding: 12px;
+            }
+
+            .mini-panel {
+                padding: 16px;
+            }
+
+            .mini-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .mini-meta {
+                align-items: flex-start;
+            }
+
+            .stats-row {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
 
-<body>
-    <div class="header">
-        <h1>BusyGraph</h1>
-        <div class="current-kpm" id="currentKPM">0</div>
-        <div class="kpm-label">Keystrokes per Minute</div>
-    </div>
+<body data-theme="system">
+    <div class="mini-shell">
+        <section class="mini-panel">
+            <header class="mini-header">
+                <div>
+                    <p class="mini-title">BusyGraph</p>
+                    <h1>Quick Stats</h1>
+                </div>
+                <div class="mini-meta">
+                    <span class="mini-meta-label">Live</span>
+                    <span class="mini-meta-value" id="lastUpdate">Loading...</span>
+                </div>
+            </header>
 
-    <div class="chart-container">
-        <div class="chart-wrapper">
-            <canvas id="miniChart"></canvas>
-        </div>
-        <div class="stats-row">
-            <div class="stat-item">
-                <div class="stat-value" id="totalKeys">0</div>
-                <div class="stat-label">Total Keys</div>
-            </div>
-            <div class="stat-item">
-                <div class="stat-value" id="maxKPM">0</div>
-                <div class="stat-label">Max KPM</div>
-            </div>
-            <div class="stat-item">
-                <div class="stat-value" id="avgKPM">0</div>
-                <div class="stat-label">Avg KPM</div>
-            </div>
-        </div>
-        <div class="last-update" id="lastUpdate">Loading...</div>
+            <section class="mini-hero">
+                <div class="mini-hero-label">Current KPM</div>
+                <div class="current-kpm" id="currentKPM">0</div>
+                <div class="mini-hero-caption">Recent typing pace over the rolling one-hour window.</div>
+            </section>
+
+            <section class="chart-card">
+                <p class="chart-title">Last 30 Minutes</p>
+                <div class="chart-wrapper">
+                    <canvas id="miniChart"></canvas>
+                </div>
+            </section>
+
+            <section class="stats-row">
+                <article class="stat-item">
+                    <p class="stat-label">Total Keys</p>
+                    <div class="stat-value" id="totalKeys">0</div>
+                </article>
+                <article class="stat-item">
+                    <p class="stat-label">Peak KPM</p>
+                    <div class="stat-value" id="maxKPM">0</div>
+                </article>
+                <article class="stat-item">
+                    <p class="stat-label">Average KPM</p>
+                    <div class="stat-value" id="avgKPM">0</div>
+                </article>
+            </section>
+
+            <div class="mini-footer">A compact instrument view aligned with the full BusyGraph dashboard.</div>
+        </section>
     </div>
 
     <script>
-        const ctx = document.getElementById('miniChart').getContext('2d');
+        function themePalette() {
+            const css = getComputedStyle(document.documentElement);
+            return {
+                panelStrong: css.getPropertyValue('--panel-strong').trim(),
+                border: css.getPropertyValue('--border').trim(),
+                text: css.getPropertyValue('--text').trim(),
+                muted: css.getPropertyValue('--muted').trim(),
+                subtle: css.getPropertyValue('--subtle').trim(),
+                grid: css.getPropertyValue('--gridline').trim(),
+                keyboard: css.getPropertyValue('--accent-keyboard').trim(),
+                keyboardFill: css.getPropertyValue('--accent-keyboard-fill').trim(),
+            };
+        }
 
+        function chartPlugins() {
+            const palette = themePalette();
+            return {
+                legend: { display: false },
+                tooltip: {
+                    backgroundColor: palette.panelStrong,
+                    titleColor: palette.text,
+                    bodyColor: palette.muted,
+                    borderColor: palette.border,
+                    borderWidth: 1,
+                    displayColors: false,
+                    padding: 10,
+                },
+            };
+        }
+
+        function chartScales() {
+            const palette = themePalette();
+            return {
+                x: {
+                    ticks: {
+                        color: palette.subtle,
+                        maxTicksLimit: 6,
+                        font: { size: 9 }
+                    },
+                    grid: { color: palette.grid },
+                    border: { color: palette.grid },
+                },
+                y: {
+                    beginAtZero: true,
+                    ticks: {
+                        color: palette.subtle,
+                        font: { size: 9 }
+                    },
+                    grid: { color: palette.grid },
+                    border: { color: palette.grid },
+                }
+            };
+        }
+
+        const ctx = document.getElementById('miniChart').getContext('2d');
         const chart = new Chart(ctx, {
             type: 'line',
             data: {
@@ -131,59 +346,41 @@
                 datasets: [{
                     label: 'KPM',
                     data: [],
-                    borderColor: '#fff',
-                    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+                    borderColor: themePalette().keyboard,
+                    backgroundColor: themePalette().keyboardFill,
                     fill: true,
-                    tension: 0.4,
+                    tension: 0.28,
                     borderWidth: 2,
                     pointRadius: 0,
                     pointHoverRadius: 4,
-                    pointBackgroundColor: '#fff',
+                    pointBackgroundColor: themePalette().keyboard,
                 }]
             },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                        padding: 8,
-                        displayColors: false,
-                    }
-                },
-                scales: {
-                    x: {
-                        display: true,
-                        grid: { color: 'rgba(255, 255, 255, 0.1)' },
-                        ticks: {
-                            color: 'rgba(255, 255, 255, 0.8)',
-                            maxTicksLimit: 6,
-                            font: { size: 9 }
-                        }
-                    },
-                    y: {
-                        display: true,
-                        beginAtZero: true,
-                        grid: { color: 'rgba(255, 255, 255, 0.1)' },
-                        ticks: {
-                            color: 'rgba(255, 255, 255, 0.8)',
-                            font: { size: 9 }
-                        }
-                    }
-                }
+                plugins: chartPlugins(),
+                scales: chartScales(),
             }
         });
+
+        function applyChartTheme() {
+            const palette = themePalette();
+            chart.data.datasets[0].borderColor = palette.keyboard;
+            chart.data.datasets[0].backgroundColor = palette.keyboardFill;
+            chart.data.datasets[0].pointBackgroundColor = palette.keyboard;
+            chart.options.plugins = chartPlugins();
+            chart.options.scales = chartScales();
+            chart.update('none');
+        }
 
         async function fetchStats() {
             try {
                 const response = await fetch('/api/stats?range=1h');
                 const data = await response.json();
 
-                // Update current KPM (use the most recent non-zero value)
                 let currentKPM = 0;
                 if (data.history && data.history.length > 0) {
-                    // Find the most recent non-zero value
                     for (let i = data.history.length - 1; i >= 0; i--) {
                         if (data.history[i].count > 0) {
                             currentKPM = data.history[i].count;
@@ -191,39 +388,36 @@
                         }
                     }
                 }
-                document.getElementById('currentKPM').innerText = currentKPM;
 
-                // Update stats
-                document.getElementById('totalKeys').innerText = data.total.toLocaleString();
-                document.getElementById('maxKPM').innerText = data.kpm.max.toLocaleString();
-                document.getElementById('avgKPM').innerText = data.kpm.avg.toFixed(1);
+                document.getElementById('currentKPM').textContent = currentKPM;
+                document.getElementById('totalKeys').textContent = data.total.toLocaleString();
+                document.getElementById('maxKPM').textContent = data.kpm.max.toLocaleString();
+                document.getElementById('avgKPM').textContent = data.kpm.avg.toFixed(1);
 
-                // Update chart (last 30 minutes for better detail)
                 const last30 = data.history.slice(-30);
-                const labels = last30.map(pt => {
-                    const date = new Date(pt.time * 1000);
+                chart.data.labels = last30.map(point => {
+                    const date = new Date(point.time * 1000);
                     return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
                 });
+                chart.data.datasets[0].data = last30.map(point => point.count);
+                chart.update('none');
 
-                chart.data.labels = labels;
-                chart.data.datasets[0].data = last30.map(pt => pt.count);
-                chart.update('none'); // Update without animation for smoother refresh
-
-                // Update timestamp
-                const now = new Date();
-                document.getElementById('lastUpdate').innerText =
-                    'Updated: ' + now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-            } catch (e) {
-                console.error("Error fetching stats:", e);
-                document.getElementById('lastUpdate').innerText = 'Error loading data';
+                document.getElementById('lastUpdate').textContent =
+                    new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            } catch (error) {
+                console.error('Error fetching stats:', error);
+                document.getElementById('lastUpdate').textContent = 'Update failed';
             }
         }
 
-        // Initial fetch
-        fetchStats();
+        const colorSchemeQuery = window.matchMedia('(prefers-color-scheme: dark)');
+        if (typeof colorSchemeQuery.addEventListener === 'function') {
+            colorSchemeQuery.addEventListener('change', applyChartTheme);
+        } else if (typeof colorSchemeQuery.addListener === 'function') {
+            colorSchemeQuery.addListener(applyChartTheme);
+        }
 
-        // Refresh every 5 seconds
+        fetchStats();
         setInterval(fetchStats, 5000);
     </script>
 </body>

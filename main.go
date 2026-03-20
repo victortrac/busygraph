@@ -218,7 +218,7 @@ func openQuickStats() {
 	defer w.Destroy()
 
 	w.SetTitle("BusyGraph Quick Stats")
-	w.SetSize(400, 450, webview.HintFixed)
+	w.SetSize(460, 520, webview.HintNone)
 	w.Navigate("http://localhost:2112/mini")
 	w.Run()
 }
